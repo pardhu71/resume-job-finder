@@ -1,59 +1,61 @@
-# RoleRoute — Resume-to-Job Finder (Version 1)
+# RoleRoute — Resume-to-Job Finder (Version 2)
 
-A beginner-friendly, free **Streamlit website** that accepts a PDF or DOCX resume, extracts readable text, identifies selected skills, and suggests job titles to research.
+This is an educational Streamlit web prototype which:
 
-**Important:** This is a working prototype, **not yet a fully autonomous AI agent**. It **does not fetch live vacancies** or verify that a specific employer is hiring. A search button opens a normal Google search. Version 2 can add actual job-source APIs and AI-based tool decisions.
+1. Extracts readable text from a PDF or DOCX resume (no OCR).
+2. Recognizes a small, explicit dictionary of skills.
+3. Suggests possible roles from example skill lists.
+4. Retrieves publicly published job posts from **selected** Greenhouse and Lever employer job boards via their documented GET APIs (no login/API key required for these public feeds).
+5. Ranks retrieved posts with an **explainable heuristic relevance estimate**, then links to their original employer pages.
 
-## Publish it for free using only a browser
+**Not an autonomous AI agent yet.** The site does not run an LLM. The job relevance number is not an actual hiring probability, job eligibility decision, or guarantee that an opening is still available. It does **not** find all jobs on the internet.
 
-1. Download `resume_job_finder_v1.zip` and **extract/unzip** it on your computer.
-2. Create a free account at [GitHub](https://github.com/signup).
-3. On GitHub, choose **New repository**, name it `resume-job-finder`, choose **Public**, and **Create repository**.
-4. On the new repository page, choose **Add file → Upload files**. From the extracted folder, upload these **three files into the repository root**:
-   - `streamlit_app.py`
-   - `analyzer.py`
-   - `requirements.txt`
-   You can also upload the `README.md` and `.streamlit/config.toml` later. (The app works without the optional config.) Click **Commit changes**.
-5. Open [Streamlit Community Cloud](https://share.streamlit.io/) and sign in using GitHub.
-6. Click **Create app** → **Yup, I have an app** (wording may change slightly).
-7. Select your `resume-job-finder` repository, branch `main`, and main file `streamlit_app.py`.
-8. Click **Deploy**. When deployment completes, Streamlit gives you a shareable `*.streamlit.app` link.
-9. Open that link in **Chrome or Edge**. First click **Try with a sample resume**. Later test a non-sensitive PDF or DOCX.
+## Upgrade existing Streamlit deployment from Version 1
 
-You do not need to install Python or run a terminal to deploy through GitHub and Streamlit Community Cloud.
+Upload these files to the **root** of your existing GitHub repository, replacing files with the same names:
 
-## Run on your own computer (optional)
+- `streamlit_app.py` (replace)
+- `analyzer.py` (replace or leave unchanged)
+- `requirements.txt` (replace)
+- `job_sources.py` (**new**)
+- `README.md` (optional)
 
-With Python 3.10+ installed, from the project directory:
+Do not upload the ZIP file itself. Commit the changes. Streamlit Community Cloud automatically redeploys the existing app from GitHub; your existing URL should remain the same.
+
+## First test
+
+1. Open the app.
+2. Click **Try with a fictional sample resume**.
+3. Review the extracted skills.
+4. Select an experience level and optionally enter a location. Leave **Only show jobs** unchecked initially.
+5. Click **Find published jobs**.
+6. If your sample company feeds return no relevant results or errors, try other employer board IDs from actual company Greenhouse / Lever career pages. Coverage is limited to selected employers.
+
+## Local run (optional)
 
 ```bash
-python -m pip install -r requirements.txt
-python -m streamlit run streamlit_app.py
+pip install -r requirements.txt
+streamlit run streamlit_app.py
 ```
 
-Open the local URL displayed in the terminal.
+## Tests
 
-## Privacy and limitations
+```bash
+python -m pytest -q
+```
 
-- When hosted, uploaded resume bytes **travel to the app's server** over the browser connection, and the uploaded content is processed in server memory. This source code does not intentionally write resumes to disk, databases, or third-party AI services.
-- The product has not undergone production security, privacy, or abuse testing. For early trials, use the built-in **fictional sample resume**; do not request real users' personal resumes yet.
-- PDF text extraction does not work for many scanned/image-only PDFs. OCR can be added later.
-- Keyword detection is not an AI language model. It can miss skills or identify terms that do not represent proficiency.
-- The example percentages are only skill-list overlap, **not** match probabilities, job-fit guarantees, hiring odds, or eligibility checks.
-- Search buttons open Google searches; they do **not** establish that any resulting vacancy is available.
-- Streamlit Community Cloud and any future AI/job APIs have free-tier limits. Scaling to many concurrent users may require spending money.
+`pytest` is only required for development tests, not for hosting.
 
-## Future milestones
+## Privacy and safety notes
 
-1. Connect supported public job APIs and show currently published jobs with source links.
-2. Add a real agent loop: plan search terms → call tools → compare job requirements → retry broader/narrower searches where appropriate.
-3. Evaluate relevance against real annotated examples and add honest match explanations.
-4. Add security review, individual accounts or anonymous sessions, consent, and deletion controls before collecting sensitive resumes broadly.
+- In the hosted version, a user's resume is transferred to the Streamlit hosting server. The prototype's application code processes resumes in memory; it does not intentionally write raw resumes to a database or send them to the job-board APIs.
+- Do not treat this as a professional privacy/security audit or deploy it with sensitive personal resumes before implementing data protection, access controls, deletion policies, abuse prevention, legal compliance, and a clear privacy notice.
+- Public employer feeds may have access restrictions or usage limits. Be respectful of providers; this app caches public board reads for 10 minutes.
+- Job descriptions are untrusted source text; they are displayed as escaped text rather than as executable HTML.
+- The app never submits applications and never shares resume text with employers.
 
-## Files
+### Data source references
 
-- `streamlit_app.py` — website UI.
-- `analyzer.py` — PDF/DOCX extraction and basic role-suggestion logic.
-- `requirements.txt` — Python libraries required for free deployment.
-- `.streamlit/config.toml` — optional appearance and upload limit.
-- `tests/test_analyzer.py` — basic developer tests.
+- Greenhouse Job Board API: https://developers.greenhouse.io/job-board.html
+- Lever public Postings API: https://github.com/lever/postings-api
+- Streamlit Community Cloud: https://docs.streamlit.io/deploy/streamlit-community-cloud
