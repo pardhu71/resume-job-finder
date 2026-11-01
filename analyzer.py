@@ -21,6 +21,23 @@ MAX_TEXT_CHARS = 100_000
 # more terms with user feedback; a keyword's presence does not establish mastery.
 SKILL_PATTERNS: dict[str, tuple[str, ...]] = {
     "Python": (r"\bpython\b",),
+    "C": (r"(?<![a-zA-Z0-9+])c\s+(?:programming|language|developer|coding)", r"\bembedded\s+c\b"),
+    "C++": (r"(?<![a-zA-Z0-9])c\+\+(?![a-zA-Z0-9])", r"\bcpp\b"),
+    "Embedded Systems": (r"\bembedded\s+(?:systems?|software|development|programming|applications?)\b",),
+    "Firmware": (r"\bfirmware\b",),
+    "Microcontrollers": (r"\bmicrocontrollers?\b", r"\bmcu\b"),
+    "STM32": (r"\bstm32[a-z0-9]*\b",),
+    "ESP32": (r"\besp32\b",),
+    "Arduino": (r"\barduino\b",),
+    "RTOS": (r"\brtos\b", r"\bfree\s?rtos\b", r"\bzephyr\s+rtos\b"),
+    "UART": (r"\buart\b",),
+    "SPI": (r"\bspi\b",),
+    "I2C": (r"\bi2c\b", r"\biic\b"),
+    "CAN Bus": (r"\bcan\s*(?:bus|protocol|fd)\b",),
+    "Embedded Linux": (r"\bembedded\s+linux\b",),
+    "Device Drivers": (r"\bdevice\s+drivers?\b", r"\blinux\s+kernel\s+drivers?\b"),
+    "PCB Design": (r"\bpcb(?:\s+design|\s+layout)?\b",),
+    "FPGA": (r"\bfpga\b", r"\bverilog\b", r"\bvhdl\b"),
     "SQL": (r"\bsql\b", r"\bmysql\b", r"\bpostgresql\b", r"\bpostgres\b"),
     "Excel": (r"\bexcel\b", r"\bspreadsheets?\b"),
     "Power BI": (r"\bpower\s*bi\b",),
@@ -63,10 +80,74 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "Business Analyst": ("Excel", "SQL", "Power BI", "Communication", "Project Management"),
     "Junior Data Scientist": ("Python", "Pandas", "NumPy", "Statistics", "Machine Learning"),
     "DevOps / Cloud Engineer": ("Linux", "Git", "Docker", "Kubernetes", "AWS", "Azure"),
+    "Embedded Software Engineer": ("Embedded Systems", "C", "C++", "Microcontrollers", "RTOS", "Git"),
+    "Firmware Engineer": ("Firmware", "C", "C++", "Microcontrollers", "STM32", "ESP32", "UART", "SPI", "I2C"),
+    "Embedded Linux Engineer": ("Embedded Linux", "Linux", "C", "C++", "Device Drivers"),
+    "RTOS / Device Driver Engineer": ("RTOS", "C", "C++", "Device Drivers", "UART", "SPI", "I2C"),
+    "IoT Firmware Engineer": ("Firmware", "ESP32", "Arduino", "Microcontrollers", "C++", "Embedded Systems"),
     "UI/UX Designer": ("Figma", "UX Research", "Wireframing"),
     "Digital Marketing Specialist": ("SEO", "Social Media Marketing", "Google Analytics"),
 }
 
+
+
+# Career field is kept separate from shared tools such as Git, Python and Linux.
+# A beginner can correct auto-detection on the website before searching.
+CAREER_DOMAINS = (
+    "Embedded Systems / Firmware", "Data & Analytics", "Software / Web Development",
+    "DevOps / Cloud", "Electronics / Hardware", "Design / UX",
+    "Digital Marketing", "General / Not sure",
+)
+
+ROLE_DOMAIN = {
+    "Junior Data Analyst": "Data & Analytics",
+    "Junior Data Scientist": "Data & Analytics",
+    "Business Analyst": "Data & Analytics",
+    "Python Developer": "Software / Web Development",
+    "Frontend Developer": "Software / Web Development",
+    "Backend Developer": "Software / Web Development",
+    "DevOps / Cloud Engineer": "DevOps / Cloud",
+    "UI/UX Designer": "Design / UX",
+    "Digital Marketing Specialist": "Digital Marketing",
+    "Embedded Software Engineer": "Embedded Systems / Firmware",
+    "Firmware Engineer": "Embedded Systems / Firmware",
+    "Embedded Linux Engineer": "Embedded Systems / Firmware",
+    "RTOS / Device Driver Engineer": "Embedded Systems / Firmware",
+    "IoT Firmware Engineer": "Embedded Systems / Firmware",
+}
+
+# Deliberately require *specialized* evidence. Git/Linux/Python alone cannot
+# classify a resume as DevOps, and general mention of "embedded dashboards"
+# cannot classify a resume as embedded engineering.
+DOMAIN_EVIDENCE = {
+    "Embedded Systems / Firmware": (
+        r"\bembedded\s+(?:systems?|software|linux|programming|development|engineer)\b",
+        r"\bfirmware\b", r"\brtos\b", r"\bfree\s?rtos\b",
+        r"\bmicrocontrollers?\b", r"\bstm32[a-z0-9]*\b",
+        r"\besp32\b", r"\bdevice\s+drivers?\b", r"\bbare[ -]?metal\b",
+        r"\buart\b", r"\bi2c\b", r"\bspi\b", r"\bcan\s+bus\b",
+    ),
+    "DevOps / Cloud": (r"\bdevops\b", r"\bkubernetes\b", r"\bk8s\b", r"\bterraform\b", r"\bci/cd\b", r"\bsite reliability\b"),
+    "Data & Analytics": (r"\bdata (?:analyst|scientist|analysis|analytics)\b", r"\bpower\s*bi\b", r"\btableau\b", r"\bpandas\b", r"\bmachine learning\b"),
+    "Software / Web Development": (r"\b(?:frontend|backend|full[ -]?stack|web)\s+(?:developer|engineer|development)\b", r"\breact(?:\.js|js)?\b", r"\bdjango\b", r"\bjavascript\b"),
+    "Electronics / Hardware": (r"\bpcb(?:\s+(?:design|layout))?\b", r"\bfpga\b", r"\bvhdl\b", r"\bverilog\b", r"\bcircuit\s+design\b"),
+    "Design / UX": (r"\bux research\b", r"\bui/ux\b", r"\bwireframes?\b", r"\bfigma\b"),
+    "Digital Marketing": (r"\bsearch engine optimization\b", r"\bseo\b", r"\bsocial media marketing\b", r"\bgoogle analytics\b"),
+}
+
+
+def infer_career_domain(resume_text: str) -> str:
+    """Conservative field guess from specialized evidence, not a qualification check."""
+    scores = {domain: sum(bool(re.search(pattern, resume_text, re.I)) for pattern in patterns)
+              for domain, patterns in DOMAIN_EVIDENCE.items()}
+    ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    # Require at least two independent signals, avoiding single-keyword errors.
+    if not ranking or ranking[0][1] < 2:
+        return "General / Not sure"
+    # Avoid guessing when two domains have identical, nontrivial evidence.
+    if len(ranking) > 1 and ranking[0][1] == ranking[1][1]:
+        return "General / Not sure"
+    return ranking[0][0]
 
 @dataclass(frozen=True)
 class RoleSuggestion:
@@ -125,10 +206,12 @@ def find_skills(text: str) -> list[str]:
     ]
 
 
-def suggest_roles(skills: list[str], limit: int = 5) -> list[RoleSuggestion]:
+def suggest_roles(skills: list[str], limit: int = 5, primary_domain: str = "General / Not sure") -> list[RoleSuggestion]:
     have = set(skills)
     results: list[RoleSuggestion] = []
     for role, desired in ROLE_SKILLS.items():
+        if primary_domain != "General / Not sure" and ROLE_DOMAIN.get(role) != primary_domain:
+            continue
         found = tuple(x for x in desired if x in have)
         if not found:
             continue

@@ -467,11 +467,57 @@ def title_relevance(title: str, roles: list[str]) -> float:
     return min(best, 1.0)
 
 
+
+# Strict field filtering prevents shared generic tools (Git, Linux, Python) from
+# pulling an Embedded/Firmware candidate toward unrelated DevOps vacancies.
+# A generic job title may still match if the description has clear specialist
+# evidence. Source descriptions can be incomplete, so candidates are invited
+# to inspect other fields using optional broad exploration.
+DOMAIN_TITLE_TERMS = {
+    "Embedded Systems / Firmware": r"\b(?:embedded|firmware|rtos|microcontroller|iot|device driver|board support|bsp|kernel|automotive software|ecu)\b",
+    "DevOps / Cloud": r"\b(?:devops|site reliability|sre|cloud engineer|platform engineer|infrastructure engineer)\b",
+    "Data & Analytics": r"\b(?:data analyst|data scientist|analytics|business analyst|business intelligence|bi analyst|data engineer)\b",
+    "Software / Web Development": r"\b(?:frontend|front-end|backend|back-end|full.stack|web developer|python developer|software developer|api developer)\b",
+    "Electronics / Hardware": r"\b(?:electronics|hardware engineer|pcb|fpga|circuit design|vlsi)\b",
+    "Design / UX": r"\b(?:ui/ux|ux designer|product designer|user experience|visual designer)\b",
+    "Digital Marketing": r"\b(?:seo|digital marketing|growth marketing|social media marketing)\b",
+}
+DOMAIN_DESCRIPTION_TERMS = {
+    "Embedded Systems / Firmware": r"\b(?:embedded systems|embedded software|firmware|rtos|free.?rtos|microcontroller|stm32|esp32|device driver|bare.metal|uart|i2c|spi|can bus)\b",
+    "DevOps / Cloud": r"\b(?:devops|kubernetes|terraform|ci/cd|site reliability|cloud infrastructure)\b",
+    "Data & Analytics": r"\b(?:data analytics|data analysis|data scientist|power bi|tableau|business intelligence|pandas)\b",
+    "Software / Web Development": r"\b(?:javascript|react|django|frontend|backend|rest apis|web applications)\b",
+    "Electronics / Hardware": r"\b(?:pcb design|fpga|verilog|vhdl|circuit design|schematics)\b",
+    "Design / UX": r"\b(?:ux research|figma|wireframes|user experience design)\b",
+    "Digital Marketing": r"\b(?:search engine optimization|seo|social media marketing|google analytics)\b",
+}
+GENERIC_SOFTWARE_TITLE = re.compile(r"\b(?:software engineer|software developer|systems engineer|programmer|engineering intern|graduate engineer|technical intern)\b", re.I)
+
+
+def domain_is_relevant(job: JobListing, primary_domain: str) -> bool:
+    """Prefer precision: role field in the title or specialist proof in description.
+
+    An unknown/general field imposes no restriction; an Embedded candidate can
+    optionally switch off domain restrictions to inspect broader opportunities.
+    """
+    if primary_domain not in DOMAIN_TITLE_TERMS:
+        return True
+    if re.search(DOMAIN_TITLE_TERMS[primary_domain], job.title, re.I):
+        return True
+    if not GENERIC_SOFTWARE_TITLE.search(job.title):
+        return False
+    # Generic "Software Engineer" titles may be relevant only if their full
+    # description supplies at least two independent specialist indicators.
+    pattern = DOMAIN_DESCRIPTION_TERMS[primary_domain]
+    hits = set(m.group(0).lower() for m in re.finditer(pattern, job.description, re.I))
+    return len(hits) >= 2
+
 def match_jobs(
     jobs: list[JobListing], skills: list[str], roles: list[str], *,
     scopes: set[str] | None = None, years_experience: int = 0,
     strict_experience: bool = True, preferred_city: str = "", strict_city: bool = False,
     limit: int = 30, exploratory: bool = False,
+    primary_domain: str = "General / Not sure", restrict_domain: bool = False,
 ) -> list[JobMatch]:
     """Ranking with title/skill/experience/location signals; not an eligibility decision."""
     scopes = scopes if scopes is not None else {"India", "International", "Remote"}
@@ -484,6 +530,8 @@ def match_jobs(
             continue
         seen_urls.add(unique)
         if not chosen_scope(job, scopes):
+            continue
+        if restrict_domain and not domain_is_relevant(job, primary_domain):
             continue
         city_ok = location_text_matches(job.location, preferred_city)
         if strict_city and preferred_city and not city_ok:
@@ -551,6 +599,7 @@ def matching_diagnostics(
     jobs: list[JobListing], skills: list[str], roles: list[str], *,
     scopes: set[str] | None = None, years_experience: int = 0,
     strict_experience: bool = True, preferred_city: str = "", strict_city: bool = False,
+    primary_domain: str = "General / Not sure", restrict_domain: bool = False,
 ) -> dict[str, int]:
     """Count how many distinct postings survive each stage of the same hard filters.
 
@@ -559,7 +608,7 @@ def matching_diagnostics(
     """
     scopes = scopes if scopes is not None else {"India", "International", "Remote"}
     counts = {
-        "retrieved": len(jobs), "unique": 0, "region": 0,
+        "retrieved": len(jobs), "unique": 0, "region": 0, "domain": 0,
         "city": 0, "experience": 0, "relevance": 0, "exploratory": 0,
     }
     seen: set[str] = set()
@@ -573,6 +622,9 @@ def matching_diagnostics(
         if not chosen_scope(job, scopes):
             continue
         counts["region"] += 1
+        if restrict_domain and not domain_is_relevant(job, primary_domain):
+            continue
+        counts["domain"] += 1
         if strict_city and preferred_city and not location_text_matches(job.location, preferred_city):
             continue
         counts["city"] += 1
