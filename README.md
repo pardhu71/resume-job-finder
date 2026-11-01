@@ -1,54 +1,58 @@
-# RoleRoute — Resume-to-Job Finder (Version 3)
+# RoleRoute Version 4 — Wider job discovery (India + international + remote)
 
-A **browser-based** Streamlit prototype for Chrome/Edge that reads PDF/DOCX resumes, recommends example job roles, **automatically fetches vacancies** from a curated group of employer boards in India and overseas, optionally includes remote jobs, and ranks the results using transparent heuristics.
+**What changed:** RoleRoute can now retrieve postings from a **curated subset** of public employer career feeds using **Greenhouse, Lever, Ashby, SmartRecruiters, and Remotive**. It also gives users **search links** to Indeed, Internshala, LinkedIn, Naukri, Foundit, Google, and **18 official company career portals**. The search links are a separate feature: RoleRoute **does not retrieve or rank jobs** from those external platforms.
 
-**Honest status:** Version 3 is an automated, **rule-based search-and-ranking workflow**, not an autonomous LLM agent. It **cannot guarantee all jobs, 100% resume compatibility, employment eligibility, vacancy status, or getting hired**. No job applications are submitted.
+**Important limitations:**
+- This is **not a search index of every vacancy on the internet**. The app cannot access private/unlisted vacancies, premium-only content without a subscription/license, or unrestricted API results.
+- This is a **rule-based prototype**, not yet an LLM-powered autonomous AI agent. Scores are **heuristic relevance estimates**, not eligibility or hiring probabilities.
+- Provider feeds can fail, change, include stale vacancies, or omit full requirements. Some URLs may only lead to a company's career board; in that case you must find the specific role there.
+- **No applications are submitted**, no premium paywall is bypassed, and no user's resume text is sent to job platforms by our app.
+- **Do not collect sensitive real-world resumes from the public** until you complete a production privacy/security review, privacy notice and consent, retention/deletion controls, abuse prevention, and hosting checks. Use the fictional sample initially.
 
-## Update your already-deployed RoleRoute app (easy, no coding)
+## Update your existing live website (no need to delete old files)
 
-1. Download `resume_job_finder_v3.zip` and **extract it**.
-2. Go to your existing GitHub repository: https://github.com/pardhu71/resume-job-finder
-3. Open **Add file → Upload files**. From the extracted folder, upload these four files to the repository **root** (not inside another folder):
-   - `streamlit_app.py` — **replace** the old version.
-   - `job_sources.py` — **replace** the old version.
-   - `analyzer.py` — replace (unchanged from v2, harmless).
-   - `requirements.txt` — replace (unchanged from v2).
-4. Optional: replace `README.md` in the repository.
-5. Scroll down and choose **Commit changes**.
-6. Your existing Streamlit URL will update after the GitHub commit. Open it and confirm the left sidebar says **Version 3**. If it doesn't, refresh and open **Manage app** for logs.
+1. Download and **extract** `resume_job_finder_v4.zip`.
+2. Open your existing repository: https://github.com/pardhu71/resume-job-finder
+3. Select **Add file → Upload files**.
+4. Upload these four files to the **repository root**, replacing the previous versions with the **same filenames**:
+   - `streamlit_app.py`
+   - `job_sources.py`
+   - `analyzer.py`
+   - `requirements.txt`
+5. Optionally replace the repository `README.md` with this file. Do not upload the ZIP itself.
+6. Click **Commit changes**. Streamlit will redeploy your **existing website URL**. Check the sidebar says **Version 4**.
 
-**Do not upload the ZIP itself.** If GitHub says there is no changed file, that's fine for the unchanged files.
+## Test V4
 
-## Quick test
+1. Click **Use fictional sample resume**.
+2. Select **India**, **International**, and **Remote**.
+3. Select **0 years** of experience, and leave **Hide roles that appear to require more experience** on.
+4. Click **Automatically find matching jobs**.
+5. Review retrieved posting counts **by source**, diagnostics, ranked listings, and original employer links.
+6. Continue down to **Search more websites and company careers**. Click **Indeed**, **Internshala**, or any company portal. Those pages open externally. Results there have **not** been inspected by RoleRoute.
+7. For freshers, search for `Data Analyst Intern` or `Graduate Trainee`, and do not assume every listing allows freshers or India-based remote workers.
 
-1. Click **Use fictional sample resume**. Use the sample during initial testing instead of sensitive personal resumes.
-2. Set **Where should we look?** to `India`, `International`, and `Remote` (all selected by default).
-3. Leave `0` years of experience and **Hide roles that appear to require more experience** enabled.
-4. Click **Automatically find matching jobs**. The app chooses a small collection of public boards without asking you to type board IDs, plus a remote feed.
-5. The app shows the retrieved total and up to 30 ranked **potential matches**. Click through to the provider/employer site and validate each vacancy.
-6. Try unchecking the experience filter or choosing `India` only. No results means **none matched in the sources checked**, not that no jobs exist.
+## Source coverage and refresh
 
-## Data sources and refresh policy
+**Actual individual jobs shown in RoleRoute:**
+- **Greenhouse**: public GET for specifically listed employer boards (max 200 per board).
+- **Lever**: public employer postings, optionally with board IDs supplied by the user (max 200).
+- **Ashby**: public job-board postings for a specified organization (max 200).
+- **SmartRecruiters**: public postings for a specified company (first 100). Summary records may lack full job descriptions and direct job URLs; if missing, the app links to the official company career board and labels that clearly.
+- **Remotive**: remote jobs returned via its public feed (up to 200), delayed by at least 24 hours. Each job keeps source attribution and its Remotive link. The remote feed is cached for six hours per running app process to comply with the suggested refresh limit of roughly 4 calls/day. Multi-instance traffic still needs monitoring.
 
-- **Greenhouse public Job Board API**: curated India-related board IDs `aidashinc`, `sigmoid`, `tide`, `purestorage`, `instead`, `zyngacareers`, plus international boards `figma`, `ramp`, `galaxydigitalservices`. These are **illustrative starting employers**, not guaranteed reachable or exhaustively representative. Most public feeds cap to 200 postings **per board** in this prototype. The GET endpoints require no credentials.
-- **Lever public Postings API**: optional additional companies can be entered under advanced controls. No global search index is provided by Lever.
-- **Remotive public Remote Jobs API**: queried automatically when `Remote` is selected; **link to Remotive and mention Remotive for every listing** (the app does this). Jobs are **delayed at least 24 hours**; API use should be low volume (they advise about **four requests/day**, with hard limits). The app caches remote feed data for **six hours** in the running Streamlit process. A process restart clears this cache; you must monitor external usage if scaling.
-- Employer feeds are cached **20 minutes** in the running Streamlit process.
-- All feeds may fail, expire, return no vacancies, or restrict service. Remote roles may restrict countries and visa eligibility. The app surfaces known location restrictions instead of assuming remote means global access.
+The example boards are **curated**, not discovered worldwide; source failure can reduce coverage. You may add up to four board identifiers for each provider under **Advanced**. Identifiers are not arbitrary URLs.
 
-## Matching and experience limitations
+**External navigation only (not retrieved into RoleRoute):**
+- Indeed, Internshala internships and jobs, LinkedIn Jobs, Naukri, Foundit, Google, and many MNC career pages, including TCS, Infosys, Wipro, Accenture, Cognizant, IBM, Amazon, Microsoft, Google, HCLTech and others.
+- The user navigates the external site and may be required to sign in or pay for features. We do not scrape these services, evade rate limits, impersonate premium accounts, or attempt to unlock paid listings.
 
-- **Score**: title relevance up to 40 points, keywords in job descriptions up to 35, approximate experience hints up to 15, and location hints up to 10. The percentage is a **relevance score only**, NOT an estimate of hire/eligibility probability.
-- Experience is parsed conservatively from some textual phrases and senior title words. It can be wrong. When a job states a minimum over the applicant's experience, the strict filter hides it; unknown requirements are **not** assumed to be entry-level. Always check the job's original description.
-- Detected skill keywords may be listed as "nice to have" rather than mandatory. A missing keyword in a resume doesn't prove the person lacks that skill.
-- Job board "last updated" is generally **not the original posting date**. Vacancy status must be confirmed on the source page.
+## Privacy and data flow
 
-## Privacy and security
-
-- With Streamlit hosting, resume uploads reach Streamlit's server. The app parses resumes in memory and does not intentionally save raw resumes to disk/a database; it does not send resume text to employers or job APIs.
-- Do not invite public users to upload sensitive resumes until you have done a privacy/security review, added appropriate notice and consent, data retention/deletion policies, access controls if needed, and abuse protection. Streamlit hosting and its logs/services are separate from this app code.
-- External job descriptions are **untrusted data** and cannot instruct the application to perform actions. Jobs are linked to the original source. No applications are submitted automatically.
-- No paid API key is required for the starting sources. The site is free to prototype on Streamlit Community Cloud, subject to its limits and source terms; production or high-volume use could cost money.
+- A PDF/DOCX resume is uploaded to the **Streamlit-hosted server**, extracted in memory, and analyzed using a small list of skills and role patterns. We don't intentionally write the original resume to storage. Streamlit and the hosting provider may have separate operational logging and data-retention behavior.
+- Only generic **role and preferred city** are placed in external search URLs, not the full resume text, name, phone number, or contact details.
+- Retrieved job descriptions are untrusted content and should be treated only as data.
+- Apply through original websites; confirm the vacancy is still active and review requirements.
 
 ## Local run (optional)
 
@@ -57,26 +61,21 @@ python -m pip install -r requirements.txt
 python -m streamlit run streamlit_app.py
 ```
 
-## Tests
+## Automated tests
 
 ```bash
 python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests use **mock API data**, so they prove expected parsing/matching behavior but **do not validate live job availability**. Test deployed sources manually too.
+Tests use **mocked external provider responses**. They validate parsers and matching logic but **do not prove live job access** from deployed Streamlit.
 
-## Useful official documentation
+## Official API references
 
-- Greenhouse public Job Board API: https://docs.greenhouse.io/job-board
-- Lever public posting API: https://github.com/lever/postings-api
-- Remotive API and terms: https://remotive.com/remote-jobs/api
-- Streamlit hosting: https://docs.streamlit.io/deploy/streamlit-community-cloud
-
-
-## V3.1 diagnostic update
-
-- Shows the number of postings remaining after deduplication, region, city, experience, and relevance filtering.
-- When no strong matches are found, users can opt into a clearly labeled broader exploratory-results view (not guaranteed fits; includes potential senior/ineligible roles).
-- Normal strict matching behavior is unchanged.
-- No additional API access or secrets are required.
+- Greenhouse: https://docs.greenhouse.io/job-board
+- Lever: https://github.com/lever/postings-api
+- Ashby: https://developers.ashbyhq.com/docs/public-job-posting-api
+- SmartRecruiters: https://developers.smartrecruiters.com/docs/endpoints
+- Remotive: https://remotive.com/remote-jobs/api
+- Indeed developer agreement: https://docs.indeed.com/legal-terms/developer-agreement
+- Adzuna evaluation and licensing (a potential future source, **not** included here): https://developer.adzuna.com/docs/terms_of_service

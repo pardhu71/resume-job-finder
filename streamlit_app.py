@@ -1,17 +1,19 @@
-"""RoleRoute v3.1 — discover public vacancies + transparent resume matching.
+"""RoleRoute v4 — multi-source public jobs + clearly labeled external discovery.
 
 This version is an automated, rule-based workflow rather than an LLM agent.
 """
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
 
 import streamlit as st
 
 from analyzer import extract_resume_text, find_skills, google_job_search_url, suggest_roles
 from job_sources import (
-    DEFAULT_BOARDS, JobSourceError, JobListing,
+    DEFAULT_BOARDS, EXTRA_DEFAULT_BOARDS, CAREER_PORTALS, JobSourceError, JobListing,
     fetch_greenhouse_jobs, fetch_lever_jobs, fetch_remotive_jobs,
+    fetch_ashby_jobs, fetch_smartrecruiters_jobs, external_search_links,
     match_jobs, matching_diagnostics, parse_board_names,
 )
 
@@ -33,29 +35,30 @@ st.markdown("""
 
 with st.sidebar:
     st.markdown("## 🎯 RoleRoute")
-    st.caption("Resume-to-Job Finder · Version 3.1")
+    st.caption("Resume-to-Job Finder · Version 4")
     st.divider()
     st.markdown("**Available now**")
     st.write("✅ Read PDF and DOCX resumes")
     st.write("✅ Suggest roles from detected skills")
-    st.write("✅ Automatically choose public job sources")
+    st.write("✅ Public feeds: Greenhouse, Lever, Ashby & SmartRecruiters")
+    st.write("✅ Indeed / Internshala / MNC search links")
     st.write("✅ India, international and remote filters")
     st.write("✅ Experience-aware relevance estimates")
     st.markdown("**Not yet included**")
     st.write("⏳ LLM-driven autonomous agent")
-    st.write("⏳ All job boards worldwide")
+    st.write("⏳ Premium/private job-site feeds without permission")
     st.write("⏳ Verified eligibility / auto-applying")
     st.divider()
     st.caption("Early prototype. Please use fictional resumes for testing.")
 
-st.markdown('<div class="rr-eyebrow">VERSION 3.1 · SMARTER JOB DISCOVERY</div>', unsafe_allow_html=True)
+st.markdown('<div class="rr-eyebrow">VERSION 4 · MORE SOURCES, MORE REACH</div>', unsafe_allow_html=True)
 st.markdown('<div class="rr-title">Discover jobs that align with your resume.</div>', unsafe_allow_html=True)
-st.markdown('<div class="rr-subtitle">Upload a resume, select your experience and preferred regions, then find ranked vacancies from selected public employer boards and a remote-jobs feed. Opens in Chrome and Edge.</div>', unsafe_allow_html=True)
+st.markdown('<div class="rr-subtitle">Upload a resume and explore employer job feeds, India/international/remote roles, major company career sites, and job-platform searches. Works in Chrome and Edge.</div>', unsafe_allow_html=True)
 
 for col, name, desc in zip(
     st.columns(3),
     ["01 · Read resume", "02 · Choose search", "03 · Compare jobs"],
-    ["PDF or DOCX, with a sample included", "India + international + remote", "Skills, job requirements and direct links"],
+    ["PDF or DOCX, with a sample included", "More job feeds + external websites", "Skills, experience, locations and direct links"],
 ):
     with col:
         st.markdown(f'<div class="rr-card"><strong>{name}</strong><small>{desc}</small></div>', unsafe_allow_html=True)
@@ -94,7 +97,13 @@ def get_board(provider: str, board: str) -> list[JobListing]:
     """Caches only public jobs, never users' resume text or personal information."""
     if provider == "Greenhouse":
         return fetch_greenhouse_jobs(board)
-    return fetch_lever_jobs(board)
+    if provider == "Lever":
+        return fetch_lever_jobs(board)
+    if provider == "Ashby":
+        return fetch_ashby_jobs(board)
+    if provider == "SmartRecruiters":
+        return fetch_smartrecruiters_jobs(board)
+    raise JobSourceError("Unknown source provider")
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_remote_jobs() -> list[JobListing]:
@@ -138,14 +147,21 @@ else:
                                  help="Heuristic: checks explicit years and seniority words in job titles. Unknown requirements can still appear.")
         extra_role = st.text_input("Specific job role (optional)", placeholder="e.g. Data Analyst Intern")
 
-    with st.expander("Advanced: add specific employer boards (optional)"):
-        st.caption("The app chooses starting boards automatically. Extra boards are optional and must be valid public Greenhouse/Lever board IDs. Up to four per provider.")
+    with st.expander("Advanced: include additional employer job boards (optional)"):
+        st.caption(
+            "The app chooses a curated starting set automatically. Add optional company identifiers "
+            "from that company's public Greenhouse, Lever, Ashby or SmartRecruiters career page "
+            "(up to four extra boards per provider). This is not an unrestricted global search."
+        )
         gh_extra = st.text_input("Additional Greenhouse board IDs", placeholder="company1, company2")
         lever_extra = st.text_input("Additional Lever board IDs", placeholder="company1, company2")
+        ashby_extra = st.text_input("Additional Ashby page names", placeholder="company1, company2")
+        sr_extra = st.text_input("Additional SmartRecruiters company identifiers", placeholder="company1, company2")
 
     st.caption(
-        "Our starting source list contains selected employers with India and international openings; "
-        "Remotive adds remote listings. This is not an exhaustive index of jobs in any country."
+        "Automatic results come from selected, permitted public feeds. "
+        "We also provide external searches for Indeed, Internshala and major company careers. "
+        "A premium website cannot be unlocked by this app."
     )
     run_search = st.button("🔎 Automatically find matching jobs", type="primary", use_container_width=True)
 
@@ -156,6 +172,8 @@ else:
             try:
                 extra_gh = parse_board_names(gh_extra)
                 extra_lever = parse_board_names(lever_extra)
+                extra_ashby = parse_board_names(ashby_extra)
+                extra_sr = parse_board_names(sr_extra)
             except JobSourceError as exc:
                 st.error(str(exc))
             else:
@@ -163,8 +181,11 @@ else:
                 for region in ("India", "International"):
                     if region in scopes:
                         sources.extend(("Greenhouse", board) for board in DEFAULT_BOARDS[region])
+                        sources.extend(EXTRA_DEFAULT_BOARDS[region])
                 sources += [("Greenhouse", board) for board in extra_gh]
                 sources += [("Lever", board) for board in extra_lever]
+                sources += [("Ashby", board) for board in extra_ashby]
+                sources += [("SmartRecruiters", board) for board in extra_sr]
                 sources = list(dict.fromkeys(sources))
                 if "Remote" in scopes:
                     sources.append(("Remotive", "remote-feed"))
@@ -173,7 +194,7 @@ else:
                 errors: list[str] = []
                 if sources:
                     with st.spinner(f"Searching {len(sources)} public job sources... (a source may fail)"):
-                        with ThreadPoolExecutor(max_workers=min(6, len(sources))) as executor:
+                        with ThreadPoolExecutor(max_workers=min(8, len(sources))) as executor:
                             pending = {
                                 executor.submit(get_remote_jobs if provider == "Remotive" else get_board,
                                                 *(() if provider == "Remotive" else (provider, board))): (provider, board)
@@ -187,19 +208,24 @@ else:
                                     errors.append(f"{provider}/{board}: unavailable or access restricted")
                                 except Exception:
                                     errors.append(f"{provider}/{board}: unexpected response")
-                st.session_state.job_results_v3 = collected
-                st.session_state.job_errors_v3 = errors
-                st.session_state.job_sources_v3 = sources
-                st.session_state.job_searched_v3 = True
+                st.session_state.job_results_v4 = collected
+                st.session_state.job_errors_v4 = errors
+                st.session_state.job_sources_v4 = sources
+                st.session_state.job_searched_v4 = True
 
-    if st.session_state.get("job_searched_v3"):
-        jobs = st.session_state.get("job_results_v3", [])
-        errors = st.session_state.get("job_errors_v3", [])
+    if st.session_state.get("job_searched_v4"):
+        jobs = st.session_state.get("job_results_v4", [])
+        errors = st.session_state.get("job_errors_v4", [])
         st.subheader("4. Job search results")
         st.caption(
             f"Retrieved {len(jobs)} public postings from selected job sources (before filtering and ranking). "
             "Open each source link to verify the job is still open and that you meet the requirements."
         )
+        provider_counts = Counter(job.source for job in jobs)
+        if provider_counts:
+            st.write("**Actual retrieved feed counts:** " + " · ".join(
+                f"{provider}: {count}" for provider, count in sorted(provider_counts.items())
+            ))
         if errors:
             with st.expander(f"{len(errors)} source(s) unavailable — others can still work"):
                 for message in errors:
@@ -282,6 +308,8 @@ else:
                     right.metric("Est. relevance", f"{item.score}%")
                     st.progress(item.score / 100)
                     st.write("**Skills found in both:** " + (", ".join(item.matching_skills) or "None found"))
+                    if not job.description.strip():
+                        st.warning("This source did not supply a full job description. Relevance is based mostly on the title and location; verify the requirements on the employer site.")
                     if item.missing_skills:
                         st.write("**Skills in listing not found in resume:** " + ", ".join(item.missing_skills))
                     st.caption("Experience: " + item.experience_note)
@@ -298,18 +326,52 @@ else:
                         st.write(job.description[:2000] if job.description else "This feed has no description.")
                     if job.source == "Remotive":
                         st.caption("Remote job provided by **Remotive** · Remotive's public API listings may be delayed by at least 24 hours.")
-                    st.link_button(
-                        "View on Remotive" if job.source == "Remotive" else "View original vacancy",
-                        job.url,
+                    job_button = (
+                        "View on Remotive" if job.source == "Remotive" else
+                        "Open company career board — find this job title" if
+                        job.source == "SmartRecruiters" and job.url.startswith("https://careers.smartrecruiters.com/")
+                        else "View original vacancy"
                     )
+                    st.link_button(job_button, job.url)
+
         st.info(
-            "**Important:** The app uses an automatic *rule-based* search and ranking workflow, "
-            "not a generative AI model or autonomous LLM agent yet. It doesn't search every job site, "
-            "guarantee qualifications, or apply for jobs automatically."
+            "**Important:** Only listings retrieved above have been processed for relevance. "
+            "External website search results below are NOT fetched, reviewed or scored by this app. "
+            "RoleRoute is currently rule-based, not an autonomous generative-AI agent."
         )
 
+    st.subheader("5. Search more websites and company careers")
+    st.caption(
+        "These are human-initiated external searches. They may show additional jobs, but RoleRoute has "
+        "NOT retrieved or verified them, and some websites require sign-in or a paid plan. "
+        "We never send your resume text to these sites; only a role and optional city appear in search URLs."
+    )
+    role_for_search = extra_role.strip() or (roles[0] if roles else "entry level jobs")
+    if len(role_for_search) > 80:
+        role_for_search = role_for_search[:80]
+    country_for_search = "India" if "India" in scopes else "Worldwide"
+    links = external_search_links(role_for_search, city, country_for_search)
+    for left, right in zip(links[::2], links[1::2]):
+        a_col, b_col = st.columns(2)
+        for col, (name, note, url) in ((a_col, left), (b_col, right)):
+            with col:
+                with st.container(border=True):
+                    st.write(f"**{name}**")
+                    st.caption(note)
+                    st.link_button(f"Open {name}", url)
+    with st.expander(f"Browse official company careers ({len(CAREER_PORTALS)} links)", expanded=False):
+        st.caption(
+            "Direct official portals. These links are not automatic vacancy retrieval. "
+            "Use each company's own filters to check current openings and eligibility."
+        )
+        for i in range(0, len(CAREER_PORTALS), 3):
+            cols = st.columns(3)
+            for col, (name, url) in zip(cols, CAREER_PORTALS[i:i+3]):
+                with col:
+                    st.link_button(f"{name} careers", url, use_container_width=True)
+
 st.markdown(
-    '<div class="rr-footer">RoleRoute v3.1 · Free prototype · Source-aware matching · '
+    '<div class="rr-footer">RoleRoute v4 · Free prototype · More permitted job feeds + external search links · '
     'No resume submission to employers · Check every vacancy before applying.</div>',
     unsafe_allow_html=True,
 )

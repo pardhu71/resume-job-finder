@@ -1,4 +1,4 @@
-"""RoleRoute v3: public vacancy adapters + inspectable, non-LLM matching.
+"""RoleRoute v4: multiple permitted public feeds and transparent matching.
 
 Only fixed public GET APIs are contacted. No resume content or personal details
 are sent to job sources. Scores are heuristics, not hiring or eligibility odds.
@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from html.parser import HTMLParser
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, urlencode
 
 import requests
 
@@ -35,6 +35,72 @@ DEFAULT_BOARDS: dict[str, dict[str, str]] = {
         "galaxydigitalservices": "Galaxy",
     },
 }
+# Verified examples of company career pages using public feeds. A successful
+# board lookup is not guaranteed, and any feed can be down or change.
+# The registry is deliberately curated, not an imaginary universal job index.
+EXTRA_DEFAULT_BOARDS: dict[str, list[tuple[str, str]]] = {
+    "India": [
+        ("SmartRecruiters", "Freshworks"),
+        ("SmartRecruiters", "ServiceNow"),
+        ("SmartRecruiters", "Nagarro1"),
+        ("SmartRecruiters", "Experian"),
+        ("Ashby", "pragmatike"),
+        ("Ashby", "firstwork"),
+    ],
+    "International": [
+        ("SmartRecruiters", "Grab"),
+        ("Ashby", "Ashby"),
+    ],
+}
+
+# Links go to actual platforms, not to a fabricated jobs API. These portals
+# might require accounts, subscriptions, or manual searching.
+CAREER_PORTALS: tuple[tuple[str, str], ...] = (
+    ("TCS", "https://www.tcs.com/careers/india"),
+    ("Infosys", "https://www.infosys.com/careers/apply.html"),
+    ("Wipro", "https://careers.wipro.com/"),
+    ("Accenture", "https://www.accenture.com/in-en/careers"),
+    ("Cognizant", "https://careers.cognizant.com/india-en/"),
+    ("IBM", "https://www.ibm.com/in-en/careers/search"),
+    ("Amazon", "https://www.amazon.jobs/en/search?country%5B%5D=IND"),
+    ("Microsoft", "https://careers.microsoft.com/"),
+    ("Google", "https://www.google.com/about/careers/applications/jobs/results/"),
+    ("HCLTech", "https://www.hcltech.com/careers"),
+    ("Capgemini", "https://www.capgemini.com/in-en/careers/"),
+    ("Deloitte", "https://www.deloitte.com/in/en/careers.html"),
+    ("EY", "https://careers.ey.com/"),
+    ("Oracle", "https://careers.oracle.com/"),
+    ("Adobe", "https://careers.adobe.com/"),
+    ("Freshworks", "https://careers.smartrecruiters.com/Freshworks"),
+    ("ServiceNow", "https://careers.smartrecruiters.com/ServiceNow"),
+    ("Nagarro", "https://careers.smartrecruiters.com/Nagarro1"),
+)
+
+
+def external_search_links(role: str, city: str = "", country: str = "India") -> list[tuple[str, str, str]]:
+    """Human-initiated search links; does NOT retrieve or validate any jobs."""
+    role = re.sub(r"[^\w\s/+#.-]", " ", role or "jobs").strip()[:80] or "jobs"
+    city = re.sub(r"[^\w\s.-]", " ", city or "").strip()[:60]
+    place = city or country
+    query = f"{role} {place}".strip()
+    return [
+        ("Indeed India", "External search (results not inspected)",
+         "https://in.indeed.com/jobs?" + urlencode({"q": role, "l": place})),
+        ("Internshala internships", "Open platform and search manually",
+         "https://internshala.com/internships/"),
+        ("Internshala jobs", "Open platform and search manually",
+         "https://internshala.com/jobs/"),
+        ("LinkedIn Jobs", "External search; sign-in may be needed",
+         "https://www.linkedin.com/jobs/search/?" + urlencode({"keywords": role, "location": place})),
+        ("Naukri", "Open platform and search manually", "https://www.naukri.com/"),
+        ("Foundit", "Open platform and search manually", "https://www.foundit.in/"),
+        ("Google web search", "Unverified web search results",
+         "https://www.google.com/search?" + urlencode({"q": query + " jobs careers apply"})),
+        ("Search official career sites", "Search across company websites via Google",
+         "https://www.google.com/search?" + urlencode({"q": query + " site:careers.cognizant.com OR site:careers.smartrecruiters.com OR site:jobs.ashbyhq.com"})),
+    ]
+
+
 _ALLOWED_BOARD = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,49}$")
 _TIMEOUT = (4, 15)
 _MAX_JOBS_PER_BOARD = 200
@@ -123,6 +189,13 @@ class JobListing:
     last_updated: str = ""
     is_remote: bool = False
     candidate_location: str = ""  # Explicit region restrictions when provider supplies them
+
+
+def canonical_job_key(job: JobListing) -> str:
+    """Distinct SmartRecruiters postings may only link to a shared career page."""
+    if job.source == "SmartRecruiters" and job.url.startswith("https://careers.smartrecruiters.com/"):
+        return f"smartrecruiters:{job.company.lower()}:{job.job_id}" if job.job_id else canonical_url(job.url)
+    return canonical_url(job.url)
 
 
 @dataclass(frozen=True)
@@ -234,6 +307,85 @@ def fetch_remotive_jobs() -> list[JobListing]:
     return result
 
 
+
+def fetch_ashby_jobs(board: str) -> list[JobListing]:
+    """Ashby's documented public job posting API for a single jobs page."""
+    board = board_name(board)
+    data = _get_json(f"https://api.ashbyhq.com/posting-api/job-board/{board}", {})
+    if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+        raise JobSourceError("Unexpected data from Ashby.")
+    result: list[JobListing] = []
+    for item in data["jobs"][:_MAX_JOBS_PER_BOARD]:
+        if not isinstance(item, dict) or item.get("isListed") is False:
+            continue
+        url, title = item.get("jobUrl"), item.get("title")
+        if not valid_job_url(url) or not isinstance(title, str) or not title.strip():
+            continue
+        workplace = str(item.get("workplaceType") or "")
+        loc = str(item.get("location") or "Unknown")
+        # Ashby: isRemote may also be true for hybrid; only count Remote as remote.
+        is_remote = workplace.lower() == "remote"
+        if is_remote and "remote" not in loc.lower():
+            loc = "Remote · " + loc
+        desc = str(item.get("descriptionPlain") or "") or clean_html(str(item.get("descriptionHtml") or ""))
+        result.append(JobListing(
+            source="Ashby", company=board,
+            job_id=str(item.get("id") or item.get("jobUrl") or ""),
+            title=title.strip(), location=loc, description=desc[:24_000],
+            url=url, last_updated=str(item.get("publishedAt") or "")[:10],
+            is_remote=is_remote,
+            candidate_location=loc if is_remote else "",
+        ))
+    return result
+
+
+def fetch_smartrecruiters_jobs(board: str) -> list[JobListing]:
+    """SmartRecruiters public per-company Posting API (first 100 jobs)."""
+    board = board_name(board)
+    data = _get_json(
+        f"https://api.smartrecruiters.com/v1/companies/{board}/postings",
+        {"limit": 100, "offset": 0},
+    )
+    if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+        raise JobSourceError("Unexpected data from SmartRecruiters.")
+    result: list[JobListing] = []
+    for item in data["content"][:100]:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("name")
+        job_id = str(item.get("id") or "")
+        # Public list responses might omit a direct job URL. In that case,
+        # open the official company career board; do NOT invent a job link.
+        url = item.get("jobAdUrl") or item.get("applyUrl")
+        if not valid_job_url(url):
+            url = f"https://careers.smartrecruiters.com/{board}"
+        if not valid_job_url(url) or not isinstance(title, str) or not title.strip():
+            continue
+        loc = item.get("location") or {}
+        if isinstance(loc, dict):
+            country = str(loc.get("country") or "")
+            country = {"IN": "India", "IND": "India", "US": "United States", "USA": "United States"}.get(country.upper(), country)
+            location = ", ".join([part for part in [
+                str(loc.get("city") or "").strip(), str(loc.get("region") or "").strip(), country,
+            ] if part])
+            remote = bool(loc.get("remote"))
+        else:
+            location, remote = str(loc), False
+        # Company summary endpoint often omits description. Titles are still
+        # useful, but mark missing requirements as unknown in the UI.
+        description = str(item.get("jobDescription") or item.get("description") or "")
+        if isinstance(item.get("department"), dict):
+            department = str(item["department"].get("label") or "")
+            description = (description + " " + department).strip()
+        result.append(JobListing(
+            source="SmartRecruiters", company=board, job_id=job_id,
+            title=title.strip(), location=location or "Unknown", description=clean_html(description),
+            url=url, last_updated=str(item.get("releasedDate") or "")[:10],
+            is_remote=remote or bool(re.search(r"\bremote\b", location, re.I)),
+        ))
+    return result
+
+
 def location_is_india(location: str) -> bool:
     value = location.lower()
     if re.search(r"\b(india|indian|in-based|in office india)\b", value):
@@ -327,7 +479,7 @@ def match_jobs(
     results: list[JobMatch] = []
     seen_urls: set[str] = set()
     for job in jobs:
-        unique = canonical_url(job.url)
+        unique = canonical_job_key(job)
         if unique in seen_urls:
             continue
         seen_urls.add(unique)
@@ -413,7 +565,7 @@ def matching_diagnostics(
     seen: set[str] = set()
     have = set(skills)
     for job in jobs:
-        key = canonical_url(job.url)
+        key = canonical_job_key(job)
         if key in seen:
             continue
         seen.add(key)
