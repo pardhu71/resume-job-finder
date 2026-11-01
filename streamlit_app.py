@@ -1,4 +1,4 @@
-"""RoleRoute v5.2 — upload resume, discover relevant vacancies automatically.
+"""RoleRoute v6 — auditable resume-to-vacancy AI agent.
 
 Uses permitted employer feeds only. No prebuilt job-title role taxonomy; all
 role matching comes from resume evidence and actual listings.
@@ -20,7 +20,8 @@ from job_sources import (
 )
 from matching_engine import (extract_resume_skills, resume_focus, rank_jobs,
                              evaluate_job, safe_llm_profile)
-from llm_agent import plan_search, explain_job_matches, AgentError
+from llm_agent import plan_search, explain_job_matches, interpret_resume, refine_search, AgentError
+from agent_engine import run_agent
 
 st.set_page_config(page_title='RoleRoute | Matching Jobs', page_icon='🎯', layout='wide')
 st.markdown('''<style>
@@ -32,18 +33,18 @@ st.markdown('''<style>
 
 with st.sidebar:
     st.title('🎯 RoleRoute')
-    st.caption('Resume-to-Job Finder · Version 5.2')
+    st.caption('Resume-to-Job Agent · Version 6')
     st.divider()
     st.success('Live job feed search + description-based matching')
     st.write('✅ No predefined list of job roles')
     st.write('✅ Requirement-by-requirement evidence')
     st.write('✅ India, worldwide, and remote sources')
-    st.write('✅ Optional Gemini AI review')
+    st.write('✅ AI plan → tools → evaluate → refine → explain')
     st.caption('Jobs come from supported public sources only; always verify eligibility and availability.')
 
 st.markdown('<div class="eyebrow">ROLEROUTE · RESUME-BASED JOB SEARCH</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero">Upload your resume. Discover matching jobs.</div>', unsafe_allow_html=True)
-st.markdown('<div class="desc">RoleRoute compares your resume with real job descriptions from supported public employer feeds and ranks relevant openings.</div>', unsafe_allow_html=True)
+st.markdown('<div class="desc">A controlled job-search agent that reads your resume, searches approved live employer feeds, compares actual requirements and revises the search if necessary.</div>', unsafe_allow_html=True)
 
 st.subheader('Upload resume')
 st.caption('Your resume is processed by this Streamlit server, not sent to employer job feeds. This prototype has not completed a production privacy/security audit; do not upload sensitive personal documents.')
@@ -170,15 +171,15 @@ if resume:
                                  format_func=lambda v: 'Not specified' if v is None else f'{v} years')
             country = st.text_input('Current country', value='India')
         st.caption('If experience is not specified, the app flags roles requiring years of experience for review instead of assuming you are a fresher.')
-        enable_ai = st.checkbox('Enable optional Gemini search planning and review', value=False)
+        enable_ai = st.checkbox('Enable full AI agent mode (Gemini)', value=False, help='Without an API key the app uses the free local planner and rule-based assessment. With AI enabled and consent, Gemini helps interpret, plan, refine and explain.')
         api_key = ''
         ai_model = 'gemini-2.5-flash'
         consent = False
         if enable_ai:
-            st.warning('With consent, a limited resume skill/focus summary and public job descriptions are sent to Google Gemini. Free-tier data may be used to improve Google products.')
+            st.warning('With consent, selected resume skill/focus signals and excerpts of public job descriptions are sent to Google Gemini. No full resume file is sent. Free-tier data may be used to improve Google products. Avoid including private identifiers in the career-focus box.')
             api_key = st.text_input('Gemini API key', type='password', help='Do not commit this to GitHub.')
             ai_model = st.selectbox('Gemini model', ['gemini-2.5-flash', 'gemini-2.5-flash-lite'])
-            consent = st.checkbox('I consent to sending limited candidate information and public job descriptions to Google for AI processing')
+            consent = st.checkbox('I consent to sending selected resume signals and public job description excerpts to Gemini')
             with st.expander('Preview the candidate data that AI may receive'):
                 st.json(safe_llm_profile(resume, focus))
         with st.expander('Additional authorized public employer feeds (optional)'):
@@ -205,53 +206,37 @@ if resume:
     search_requested = (is_new_upload or refresh)
     if search_requested and scopes:
         if enable_ai and (not api_key.strip() or not consent):
-            st.warning('Enter a Gemini API key and grant consent, or turn AI mode off to use free rule-based job matching.')
+            st.warning('To use full AI-agent mode, enter a Gemini API key and explicitly consent, or turn AI mode off for the free deterministic workflow.')
         else:
             try:
                 extra = {
-                    'Greenhouse': parse_board_names(st.session_state.get('gh','')),
-                    'Lever': parse_board_names(st.session_state.get('lev','')),
-                    'Ashby': parse_board_names(st.session_state.get('ash','')),
-                    'SmartRecruiters': parse_board_names(st.session_state.get('sr','')),
+                    'Greenhouse': parse_board_names(st.session_state.get('gh', '')),
+                    'Lever': parse_board_names(st.session_state.get('lev', '')),
+                    'Ashby': parse_board_names(st.session_state.get('ash', '')),
+                    'SmartRecruiters': parse_board_names(st.session_state.get('sr', '')),
                 }
             except JobSourceError as exc:
                 st.error(str(exc))
             else:
-                all_sources = find_sources(set(scopes), extra)
-                plan = None
-                if enable_ai:
-                    try:
-                        with st.spinner('AI is planning approved job searches...'):
-                            plan = plan_search(resume, focus, set(scopes), api_key, ai_model)
-                    except AgentError as exc:
-                        st.warning(str(exc))
-                if plan and not plan['start_with_extra_sources']:
-                    core = [x for x in all_sources if x[0] in ('Greenhouse', 'Remotive')]
-                    remaining = [x for x in all_sources if x not in core]
-                else:
-                    core, remaining = all_sources, []
-                with st.spinner('Finding matching jobs from public employer feeds...'):
-                    jobs, errors = fetch_sources(core)
-                ranked, stats = rank_jobs(jobs, resume, focus, years, set(scopes), country, city)
-                expanded = False
-                if remaining and stats.get('Strong', 0) < 3:
-                    with st.spinner('Expanding search to more permitted employer feeds...'):
-                        additional, more_errors = fetch_sources(remaining)
-                    jobs.extend(additional)
-                    errors.extend(more_errors)
-                    ranked, stats = rank_jobs(jobs, resume, focus, years, set(scopes), country, city)
-                    expanded = True
-                ai_reviews = {}
-                if enable_ai and plan:
-                    try:
-                        with st.spinner('AI is reviewing top job descriptions...'):
-                            ai_reviews = explain_job_matches(resume, focus, ranked[:6], api_key, ai_model)
-                    except AgentError as exc:
-                        st.warning(str(exc))
+                # The AI plans *which registered tools to call*, but never
+                # receives arbitrary network access or application permissions.
+                profile_fn = (lambda r, f: interpret_resume(r, f, api_key, ai_model)) if enable_ai else None
+                plan_fn = (lambda r, f, regions: plan_search(r, f, regions, api_key, ai_model)) if enable_ai else None
+                refine_fn = (lambda p, stats, terms: refine_search(p, stats, terms, api_key, ai_model)) if enable_ai else None
+                review_fn = (lambda r, f, matches: explain_job_matches(r, f, matches, api_key, ai_model)) if enable_ai else None
+                with st.spinner('Agent: understanding resume → planning → using job search tools → evaluating → refining...'):
+                    report = run_agent(
+                        resume, focus, years, set(scopes), country, city, extra, fetch_sources,
+                        ai_profile=profile_fn, ai_plan=plan_fn,
+                        ai_refine=refine_fn, ai_review=review_fn,
+                    )
                 st.session_state.v52_search = {
-                    'fingerprint': context, 'jobs': jobs, 'ranked': ranked, 'stats': stats,
-                    'errors': errors, 'plan': plan, 'expanded': expanded, 'reviews': ai_reviews,
-                    'used_ai': bool(plan),
+                    'fingerprint': context, 'jobs': report.jobs,
+                    'ranked': report.ranked, 'stats': report.stats,
+                    'errors': report.errors, 'plan': report.plan,
+                    'refinements': report.refinements, 'trace': report.trace,
+                    'profile': report.profile, 'reviews': report.ai_reviews,
+                    'used_ai': report.used_ai, 'requested_ai': enable_ai,
                 }
                 st.session_state.v52_searched_upload_digest = resume_digest
 
@@ -260,13 +245,23 @@ if resume:
         st.info('Search preferences changed. Click “Refresh matches using current preferences” to update the results.')
     elif results:
         st.subheader('Matching jobs for your resume')
+        st.caption('Agent mode: ' + ('Gemini-assisted reasoning with approved tools' if results.get('used_ai') else 'Free rule-based tool workflow (enable Gemini for LLM reasoning)'))
         jobs, ranked, stats = results['jobs'], results['ranked'], results['stats']
         a, b, c, d = st.columns(4)
         a.metric('Retrieved postings', stats.get('retrieved', 0))
         b.metric('Strong matches', stats.get('Strong', 0))
         c.metric('Possible matches', stats.get('Possible', 0))
         d.metric('Needs review', stats.get('Review / conflict', 0))
-        st.caption('The scores are estimates from resume and employer descriptions, not guaranteed eligibility or hiring probability.')
+        st.caption('Scores are provisional evidence-based estimates, never guaranteed eligibility, hiring probability, or a verified employment offer.')
+        with st.expander('See what the agent did — six-step decision log', expanded=False):
+            for step in results.get('trace', []):
+                st.write(step)
+            if results.get('refinements'):
+                st.write('**Search adjustments:**')
+                for step in results['refinements']:
+                    st.write('• ' + step)
+            if results.get('errors'):
+                st.caption('Unavailable steps were handled safely: ' + '; '.join(results['errors']))
         if not ranked:
             st.warning('No matching job descriptions were found in these sources. Try another region, check your experience setting, or refresh the search.')
         recommended = [(idx, item) for idx, item in enumerate(ranked)
@@ -343,4 +338,4 @@ else:
     st.session_state.pop('v52_searched_upload_digest', None)
 
 st.divider()
-st.caption('RoleRoute v5.2 · Employer listings must be verified before applying · No automatic job applications or premium access bypass.')
+st.caption('RoleRoute v6 · Read-only bounded agent · Verify all vacancies before applying · No auto-apply or premium access bypass.')

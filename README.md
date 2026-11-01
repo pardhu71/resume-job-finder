@@ -1,67 +1,61 @@
-# RoleRoute Version 5.2 — Resume In, Relevant Jobs Out
+# RoleRoute Version 6 — Bounded AI Job Search Agent
 
-RoleRoute is a beginner-friendly Streamlit website that searches supported **public employer job feeds** and compares the **actual job descriptions** with an uploaded PDF or DOCX resume. It runs in modern browsers, including Chrome and Edge.
+A Streamlit website that searches *real, permitted employer job feeds* based on an uploaded resume. It does not rely on a preselected catalog of career titles. The optional Gemini mode adds AI-driven interpretation, search planning, refinement, and evidence-focused explanations.
 
-## What changed in 5.2
+## Features and architecture
 
-- **No fictional/sample resume buttons or sample-resume instruction banner.** Users simply upload a PDF or DOCX.
-- **Automatically starts job discovery on a new upload** and displays matching vacancies. A Refresh button reruns the search after optional settings changes.
-- **Relevant jobs first:** Strong and Possible matches appear in the main results list; uncertain or potentially conflicting jobs appear under a separate expandable area. Unrelated careers should be excluded rather than ranked merely for sharing generic skills.
-- **Direct resume-to-job-description comparison:** no predefined list of job titles determines the recommendations. Matching uses evidence in the resume and employer's job description, including required/preferred skills and domain-specific terms.
-- **Better recognition of skills in multiline skill sections** (including uncommon technologies not included in the starter keyword patterns).
-- **Unknown experience is not assumed to be 0 years.** Experience can be confirmed under optional search preferences. Jobs specifying experience are marked for review when the applicant's years are unknown.
-- **Fast repeated matching:** resume skills are analyzed once per search, rather than once per vacancy. A synthetic benchmark with 1,200 postings completed the matching stage in under a second on the test machine; real site performance depends on external job feeds.
-- **A 5 MB application-side resume upload limit** and careful wording about relevance, uncertainty and privacy.
+1. **Understand the resume:** extract skills, project/career focus, basic qualification signals and experience (if known). In AI mode, Gemini checks the reduced, redacted profile, never the original PDF file.
+2. **Plan the search:** derive job/skill phrases from resume evidence. In AI mode, Gemini proposes bounded phrases and the order in which approved source groups should be checked. Unsupported or unrelated suggestions are rejected.
+3. **Use tools to fetch jobs:** the Python application calls only supported public Greenhouse, Lever, Ashby, SmartRecruiters and Remotive feeds. Feed requests are read-only. The job descriptions are real feed content, not generated vacancies. Selected company boards are illustrative and cannot index the whole internet.
+4. **Assess requirements:** compare skills mentioned as required vs preferred, seniority, reported years of experience, candidate career focus, and possible geography restrictions. Unknowns remain *unknown*; matching scores are provisional evidence heuristics, not hiring probabilities or guarantees.
+5. **Refine:** if fewer than five relevant leads appear, query additional approved public source boards. In AI mode, request one additional set of resume-grounded search terms and re-evaluate the retrieved jobs without waiving mandatory requirements. Maximum two rounds of employer feeds and one AI refinement. The alternative terms do not scrape other websites or fetch private results.
+6. **Explain:** every result shows matched and missing evidence plus cautions, original description and link. AI mode optionally adds a second written interpretation of top job descriptions. Users can view a six-step *agent decision log*.
 
-The first user-visible action is to **upload the resume**. Optional controls for regions, location, years of experience, consent-based Gemini mode, and extra approved employer feeds are inside a collapsed preferences panel.
+A full working **Gemini agent mode requires a user's own Gemini API key and explicit consent**. Otherwise, the website still performs the six-step workflow with deterministic decision rules; this is an automated job matching tool, not AI reasoning.
 
-## Update the existing GitHub + Streamlit website
+## Deploy to your existing Streamlit site
 
-You **do not** need to delete older files or create a new website.
+1. Extract the ZIP file locally.
+2. Open your existing GitHub repository `pardhu71/resume-job-finder`.
+3. Select **Add file → Upload files**. Upload all these root-level files, replacing files with matching names: `streamlit_app.py`, `analyzer.py`, `matching_engine.py`, `job_sources.py`, `llm_agent.py`, **`agent_engine.py` (NEW)**, `requirements.txt`, and optionally `README.md`.
+4. Also upload `.streamlit/config.toml` to a `.streamlit` folder if GitHub's web upload can preserve folders (the app is functional without this file, but it enforces the 5 MB upload limit at the framework level).
+5. Click **Commit changes**. Existing Streamlit Community Cloud app should redeploy from `streamlit_app.py`, keeping its URL.
+6. Check the sidebar displays **Version 6** and run a non-sensitive test resume.
 
-1. Extract the ZIP file to a folder on your computer.
-2. Open the existing repository: https://github.com/pardhu71/resume-job-finder
-3. Choose **Add file → Upload files**.
-4. Upload these six files from the extracted folder (the same names overwrite the previous versions on commit):
-   - `streamlit_app.py`
-   - `analyzer.py`
-   - `job_sources.py`
-   - `matching_engine.py`
-   - `llm_agent.py`
-   - `requirements.txt`
-5. Click **Commit changes**. Streamlit Community Cloud should redeploy from the repository automatically.
-6. Open the **existing** Streamlit URL, confirm that the sidebar says **Version 5.2**, and upload a *non-sensitive test resume* to check the results.
+If an import error for `agent_engine` appears, confirm `agent_engine.py` is in the **same root folder** as `streamlit_app.py`.
 
-If Streamlit shows an error, use **Manage app → Logs** and check that all six files are in the repository root.
+## Test guide
 
-## Test checklist
+- Upload a fictional or privacy-safe PDF/DOCX resume for Embedded Systems/Firmware, or another domain.
+- Confirm extracted skills. Expand **Search preferences and optional AI** to set geography and professional years, or leave unknown years unspecified.
+- The first search runs after file upload. It may make two calls batches against selected approved job feeds.
+- Check **Relevant job opportunities** and expand **See what the agent did — six-step decision log** to see the actions taken and why the search expanded.
+- Verify the role is truly relevant: embedded career signals should not produce unrelated DevOps recommendations based solely on generic Linux/Python/Git overlap.
+- Check the original employer page for current availability, years, location/remote eligibility, visas, and application conditions.
+- Optional AI mode: create a Google AI Studio Gemini API key, check the consent box, then press **Refresh matches using current preferences**. The key is entered in Streamlit's masked input; do **not** put keys in GitHub code or files.
 
-1. Upload a text-based PDF or DOCX resume with no personal contact details; you can create a fictional resume yourself for testing, but **the public UI no longer offers sample resumes**.
-2. Confirm that the site **starts searching automatically** without requiring a second submit click.
-3. Confirm the returned vacancies have company name, location, matching evidence and a direct source link.
-4. Test a resume focused on Embedded C, STM32, FreeRTOS and firmware: DevOps positions sharing only Git/Linux/Python should not be recommended.
-5. Try a different career-focused resume. Confirm that results change and are not selected from a fixed set of job roles.
-6. If a job has ambiguous minimum experience or location eligibility, confirm it is flagged rather than treated as confirmed eligibility.
-7. If the site finds no relevant job in its retrieved feeds, it should say so rather than invent listings.
+## Security, privacy and honesty
 
-Run the local test suite with `python -m pytest -q`. Automated tests use mocked job feeds. They **do not** prove that live public feeds are accessible or that all matching rules are accurate on every real resume.
+- The resume is uploaded to the Streamlit server and processed in session memory. This prototype is **not production security-reviewed**. Do not request sensitive applicant files before implementing informed consent, privacy notices, deletion controls, retention policies, rate limits and abuse safeguards.
+- No candidate resume or contact details are transmitted to job feed providers. In Gemini mode, selected non-identifying skills and career-focus snippets, plus top job description excerpts, are transmitted to Google under **explicit opt-in**. Candidate text can still accidentally contain personal details; inspect the *Preview the candidate data* panel before consenting. Gemini free-tier submissions may be used to improve Google's products and quotas may be limited.
+- API keys should not be logged, committed or stored in GitHub. Streamlit hosted users who enter keys interact with the backend; consider server-side secrets handling before a public launch.
+- This agent does **not** automatically apply, bypass logins/paywalls, verify legal eligibility, promise any number of jobs, or guarantee interviews.
+- Job listing descriptions are **untrusted data**. They cannot execute arbitrary agent actions or instruct the AI to apply/send email.
+- Public Remotive jobs must be attributed and linked to the Remotive listing; the cached feed is refreshed at most a few times per day. Follow provider terms and quotas.
+- `requirements.txt` pins supported major versions, not exact versions; re-check dependency compatibility and security before production deployment.
 
-## Important limitations
+## Local run (if using your own computer)
 
-- This is a prototype; it has **not** undergone a professional privacy/security audit. Uploaded resumes reach the Streamlit server. Do **not** collect real personal resumes from the public until you have appropriate data protection, retention/deletion controls, and consent.
-- The app does **not** search every job on the internet. It retrieves openings from a **limited set of public employer feeds** (Greenhouse, Lever, Ashby, SmartRecruiters and Remotive where available), plus external search links to platforms such as Indeed and Internshala. External search links are not scored or presented as verified vacancies.
-- Employer job descriptions may be incomplete or out of date, and matching is **heuristic** (not a verified qualification assessment or hiring probability).
-- Optional Gemini planning/review needs the user's own API key and opt-in. It sends a limited redacted candidate summary and some public descriptions to Google, and subject to the provider's terms and limits. **No Gemini key is required for basic matching.**
-- Premium/private feeds require permission; the app does not bypass logins, paywalls or usage restrictions.
-- RoleRoute **never applies to a job on a person's behalf**. A person must inspect the employer's source page and apply themselves.
-- If a PDF consists of scanned images, text extraction may fail; a text-based PDF or DOCX is recommended.
+```bash
+python -m pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
 
-## Repository files
+## Automated test suite
 
-- `streamlit_app.py` — user interface, auto-search and result presentation
-- `matching_engine.py` — actual job-description vs resume matching
-- `analyzer.py` — file parsing and technical skill patterns
-- `job_sources.py` — approved public job feed adapters
-- `llm_agent.py` — optional bounded Gemini integration
-- `requirements.txt` — dependencies
-- `tests/` — regression tests (do not need to upload the tests to GitHub for deployment)
+```bash
+python -m pip install pytest
+python -m pytest -q
+```
+
+Tests use **mocked job APIs/AI responses** and do not establish actual online search reliability, Streamlit cloud operation, or live Gemini availability. Production deployment remains to be verified using the user's live Streamlit app.
