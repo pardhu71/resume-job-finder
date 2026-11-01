@@ -44,13 +44,29 @@ def clean_tokens(value: str) -> list[str]:
 def extract_resume_skills(resume: str) -> tuple[str, ...]:
     """Find known technical terms AND additional comma-delimited resume skill labels."""
     skills = set(find_skills(resume))
-    for raw in resume.splitlines():
-        if re.match(r'^\s*(?:technical\s+)?(?:skills?|tools?\s*&\s*technologies)\s*:', raw, re.I):
-            content = raw.split(':', 1)[1][:400]
-            for piece in re.split(r',|\||;|\u2022', content):
-                value = piece.strip(' .\t-')
-                if 2 <= len(value) <= 38 and len(value.split()) <= 4 and not re.search(r'[@\d]{5,}', value):
-                    skills.add(value)
+    resume_lines = resume.splitlines()
+    # Accept common multi-line resume skill sections without a prebuilt role catalog.
+    in_skill_section = False
+    for raw in resume_lines:
+        section_match = re.match(r'^\s*(?:technical\s+)?(?:skills?|technologies|technical stack|tools?\s*(?:&|and)\s*technologies)\s*:?\s*(.*)$', raw, re.I)
+        if section_match:
+            in_skill_section = True
+            content = section_match.group(1)[:400]
+        elif in_skill_section:
+            if re.match(r'^\s*(?:education|projects?|work experience|experience|internships?|summary|certifications?|achievements?|interests?|contact|objective|languages?)\s*:?\s*$', raw, re.I):
+                in_skill_section = False
+                continue
+            # Avoid treating entire paragraphs and contact details as skills.
+            if not raw.strip() or len(raw) > 150 or '@' in raw:
+                in_skill_section = False
+                continue
+            content = raw.strip().lstrip('•- ')[:400]
+        else:
+            continue
+        for piece in re.split(r',|\||;|\u2022', content):
+            value = piece.strip(' .\t-')
+            if 2 <= len(value) <= 38 and len(value.split()) <= 4 and not re.search(r'[@\d]{5,}', value):
+                skills.add(value)
     return tuple(sorted(skills, key=str.casefold))
 
 
@@ -86,7 +102,12 @@ def safe_llm_profile(resume: str, extra: str = '') -> dict:
     focus = EMAIL.sub('[email removed]', focus)
     focus = PHONE.sub('[phone removed]', focus)
     focus = LINK.sub('[link removed]', focus)
-    return {'skills': list(extract_resume_skills(resume))[:65], 'career_focus': focus[:850]}
+    safe_skills = []
+    for skill in extract_resume_skills(resume):
+        skill = LINK.sub('[link removed]', PHONE.sub('[phone removed]', EMAIL.sub('[email removed]', skill)))
+        if '[' not in skill:
+            safe_skills.append(skill)
+    return {'skills': safe_skills[:65], 'career_focus': focus[:850]}
 
 
 def skill_in_text(skill: str, text: str) -> bool:
@@ -195,8 +216,9 @@ class DetailedMatch:
     description_available: bool
 
 
-def evaluate_job(job: JobListing, resume: str, focus: str, years: int, country: str='India') -> DetailedMatch:
-    have = extract_resume_skills(resume)
+def evaluate_job(job: JobListing, resume: str, focus: str, years: int | None, country: str='India',
+                 have_skills: tuple[str, ...] | None = None) -> DetailedMatch:
+    have = have_skills if have_skills is not None else extract_resume_skills(resume)
     catalog = set(have) | set(find_skills(job.description + ' ' + job.title)) | set(extract_job_requirement_terms(job.description))
     # For user-provided skills not in the known dictionary, exact phrase matching works.
     signals = requirement_signals(job.description, tuple(catalog))
@@ -215,13 +237,18 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int, country: 
     align, role_evidence, domain_ok = focus_alignment(job, focus, have)
     years_min, years_note = years_requirement(job.description)
     if years_min is not None:
-        years_note = f'Listing mentions {years_min}+ years; profile states {years}'
+        years_note = (f'Listing mentions {years_min}+ years; profile states {years}'
+                      if years is not None else f'Listing mentions {years_min}+ years; applicant experience not confirmed')
     caution = []
     conflict = False
-    if years_min is not None and years_min > years:
+    if years_min is not None and years is None:
+        caution.append('Years of experience need confirmation')
+    elif years_min is not None and years_min > years:
         caution.append('Possible minimum-experience conflict; verify if mandatory')
         conflict = True
-    elif SENIOR.search(job.title) and years < 2:
+    elif SENIOR.search(job.title) and years is None:
+        caution.append('Senior-level role: applicant years of experience need confirmation')
+    elif SENIOR.search(job.title) and years is not None and years < 2:
         caution.append('Senior-level title may not suit an entry-level applicant')
         conflict = True
     if job.is_remote:
@@ -244,7 +271,7 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int, country: 
     req_score = len(found_req)/len(required) if required else .40
     pref_score = len(found_pref)/len(preferred) if preferred else .40
     detail_score = min(1., len(found_other) / 3)
-    exp_score = 1. if years_min is not None and years >= years_min else .5 if years_min is None else 0.
+    exp_score = 1. if years_min is not None and years is not None and years >= years_min else .5 if (years_min is None or years is None) else 0.
     score = round(40 * req_score + 10 * pref_score + 15 * detail_score + 30 * align + 5 * exp_score)
     if not job.description.strip():
         score = min(score, 35)
@@ -256,7 +283,7 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int, country: 
         score = min(score, 60)
     if conflict or (not job.description.strip()) or (not domain_ok):
         category = 'Review / conflict'
-    elif align >= .25 and (not required or req_score >= .65) and not miss_req and score >= 60:
+    elif align >= .25 and (not required or req_score >= .65) and not miss_req and score >= 60 and not (years is None and (years_min is not None or SENIOR.search(job.title))):
         category = 'Strong'
     else:
         category = 'Possible'
@@ -270,11 +297,12 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int, country: 
     )
 
 
-def rank_jobs(jobs: list[JobListing], resume: str, focus: str, years: int,
+def rank_jobs(jobs: list[JobListing], resume: str, focus: str, years: int | None,
               scopes: set[str], country: str = 'India', city: str = '', max_results: int = 40) -> tuple[list[DetailedMatch], dict]:
     # Do not use a predefined role catalog. Evaluate real descriptions, and
     # keep uncertain and rejected listings distinct for exploration.
     seen: set[str] = set()
+    candidate_skills = extract_resume_skills(resume)  # compute once, not once per retrieved vacancy
     included: list[DetailedMatch] = []
     stats = Counter(retrieved=len(jobs))
     for job in jobs:
@@ -288,7 +316,7 @@ def rank_jobs(jobs: list[JobListing], resume: str, focus: str, years: int,
             continue
         stats['in_region'] += 1
         # Non-strict city: city is a preference, not a hard exclusion.
-        item = evaluate_job(job, resume, focus, years, country)
+        item = evaluate_job(job, resume, focus, years, country, have_skills=candidate_skills)
         if 'No convincing career-focus match' in ' '.join(item.warnings):
             stats['unrelated_removed'] += 1
             continue

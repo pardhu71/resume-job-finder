@@ -1,93 +1,67 @@
-# RoleRoute Version 5 — Dynamic Resume-to-Job Matching + Optional AI Planning
+# RoleRoute Version 5.2 — Resume In, Relevant Jobs Out
 
-A **free-first Streamlit web app** that opens in Chrome/Edge and helps job seekers compare their resumes against **actual descriptions from public job feeds**. Does **not** use a predefined job-title list for its Version 5 ranking.
+RoleRoute is a beginner-friendly Streamlit website that searches supported **public employer job feeds** and compares the **actual job descriptions** with an uploaded PDF or DOCX resume. It runs in modern browsers, including Chrome and Edge.
 
-## What's improved in V5
+## What changed in 5.2
 
-- **Dynamic career matching:** resume evidence (skills, projects, stated interests and optional editable focus) vs. actual vacancy titles and descriptions. No fixed role catalogue decides which careers to recommend. This fixes the common embedded-resume → DevOps generic-keyword problem.
-- **Job requirements:** tries to separate explicitly **required**, **preferred**, and merely **mentioned** technical terms; highlights skills **not evidenced in the resume** instead of assuming the candidate lacks them.
-- **Ranked groups:** Strong, Possible, and Review/Conflict. Unrelated postings are excluded from the recommendations and counted in diagnostics.
-- **Candidate constraints:** user-confirmed years of experience, country, regions, optional city. Remote country and visa issues are flagged as uncertain, never verified.
-- **Optional bounded Gemini AI planner:** if the user supplies a Gemini API key and gives explicit consent, an LLM selects search focus terms and a safe subset/order of authorized source tools. If fewer than three strong leads are found, the tool loop expands to remaining selected sources once. AI also gives a second opinion on up to six results. JSON is validated, model cannot fetch arbitrary URLs or submit applications.
-- **No AI key required:** the deterministic job description matcher and public feed search still work.
-- **Premium/private:** user can manually paste a job description they are **authorized** to access and compare against resume. App does not bypass paywalls/login, harvest private sites or pretend pasted postings have been independently verified.
-- **Human-in-the-loop application:** direct employer links and a five-item applicant confirmation checklist. **No auto-application, account login, or verified eligibility claims**.
-- **Multiple sources:** curated Greenhouse, Lever, Ashby, SmartRecruiters, and Remotive feeds (subject to real availability); external searches for Indeed, Internshala, Naukri, LinkedIn, Foundit; links to 18 employer career sites. External links are NOT treated as retrieved/scored jobs.
+- **No fictional/sample resume buttons or sample-resume instruction banner.** Users simply upload a PDF or DOCX.
+- **Automatically starts job discovery on a new upload** and displays matching vacancies. A Refresh button reruns the search after optional settings changes.
+- **Relevant jobs first:** Strong and Possible matches appear in the main results list; uncertain or potentially conflicting jobs appear under a separate expandable area. Unrelated careers should be excluded rather than ranked merely for sharing generic skills.
+- **Direct resume-to-job-description comparison:** no predefined list of job titles determines the recommendations. Matching uses evidence in the resume and employer's job description, including required/preferred skills and domain-specific terms.
+- **Better recognition of skills in multiline skill sections** (including uncommon technologies not included in the starter keyword patterns).
+- **Unknown experience is not assumed to be 0 years.** Experience can be confirmed under optional search preferences. Jobs specifying experience are marked for review when the applicant's years are unknown.
+- **Fast repeated matching:** resume skills are analyzed once per search, rather than once per vacancy. A synthetic benchmark with 1,200 postings completed the matching stage in under a second on the test machine; real site performance depends on external job feeds.
+- **A 5 MB application-side resume upload limit** and careful wording about relevance, uncertainty and privacy.
 
-## Updating your existing Streamlit website
+The first user-visible action is to **upload the resume**. Optional controls for regions, location, years of experience, consent-based Gemini mode, and extra approved employer feeds are inside a collapsed preferences panel.
 
-You do **not** need to delete old GitHub files, create another GitHub repository, or create a new Streamlit URL.
+## Update the existing GitHub + Streamlit website
 
-1. Download and extract `resume_job_finder_v5.zip`.
-2. Open your existing `https://github.com/pardhu71/resume-job-finder` repository.
-3. Click **Add file → Upload files**. Upload these SIX files from the extracted ZIP root:
-   - `streamlit_app.py` (replaces old file)
-   - `job_sources.py` (replaces old file)
-   - `analyzer.py` (replaces old file)
-   - `requirements.txt` (replaces old file, adds optional Google SDK)
-   - `matching_engine.py` (**NEW**)
-   - `llm_agent.py` (**NEW**)
-4. Click **Commit changes**. GitHub replaces files with the same names at the same path.
-5. Reopen your existing Streamlit website. Sidebar should say **Version 5**. Existing Streamlit link stays unchanged.
-6. If deployment fails, open **Manage app → logs**, and check `requirements.txt` and that the two new `.py` files are at the repository root next to `streamlit_app.py`.
+You **do not** need to delete older files or create a new website.
 
-**Never upload API keys, `.env`, `.streamlit/secrets.toml`, personal resumes, or private job text to public GitHub.**
+1. Extract the ZIP file to a folder on your computer.
+2. Open the existing repository: https://github.com/pardhu71/resume-job-finder
+3. Choose **Add file → Upload files**.
+4. Upload these six files from the extracted folder (the same names overwrite the previous versions on commit):
+   - `streamlit_app.py`
+   - `analyzer.py`
+   - `job_sources.py`
+   - `matching_engine.py`
+   - `llm_agent.py`
+   - `requirements.txt`
+5. Click **Commit changes**. Streamlit Community Cloud should redeploy from the repository automatically.
+6. Open the **existing** Streamlit URL, confirm that the sidebar says **Version 5.2**, and upload a *non-sensitive test resume* to check the results.
 
-## Quick testing
+If Streamlit shows an error, use **Manage app → Logs** and check that all six files are in the repository root.
 
-1. Click **Fictional Embedded Systems resume**.
-2. Confirm extracted technical skills, and edit career focus if necessary.
-3. Set experience to **0**, choose India + International + Remote.
-4. Keep **AI agent mode off** for the first smoke test and click **Find jobs and compare ACTUAL job requirements**.
-5. Review Strong, Possible and Review/Conflict tabs; inspect sources, requirements, limitations and links. Results can be empty because live feeds and the data pool are limited.
-6. Check the source counts and that unrelated generic DevOps roles do not appear as recommendations for the embedded sample.
-7. In Section 5 paste this **fictional** vacancy and click **Compare pasted job**:
+## Test checklist
 
-   - Title: `Firmware Engineer`
-   - Employer: `Fictional Electronics Ltd`
-   - Location: `Bengaluru, India`
-   - Requirements: `Required: Embedded C, STM32, FreeRTOS. Preferred: I2C. 0 years experience.`
+1. Upload a text-based PDF or DOCX resume with no personal contact details; you can create a fictional resume yourself for testing, but **the public UI no longer offers sample resumes**.
+2. Confirm that the site **starts searching automatically** without requiring a second submit click.
+3. Confirm the returned vacancies have company name, location, matching evidence and a direct source link.
+4. Test a resume focused on Embedded C, STM32, FreeRTOS and firmware: DevOps positions sharing only Git/Linux/Python should not be recommended.
+5. Try a different career-focused resume. Confirm that results change and are not selected from a fixed set of job roles.
+6. If a job has ambiguous minimum experience or location eligibility, confirm it is flagged rather than treated as confirmed eligibility.
+7. If the site finds no relevant job in its retrieved feeds, it should say so rather than invent listings.
 
-8. For comparison paste an unrelated **fictional** posting: `DevOps Engineer` / `Required: Python, Linux, Git, Kubernetes, Docker.` and verify it is flagged as unrelated / needing review rather than recommended.
+Run the local test suite with `python -m pytest -q`. Automated tests use mocked job feeds. They **do not** prove that live public feeds are accessible or that all matching rules are accurate on every real resume.
 
-## Optional genuine model-driven AI mode
+## Important limitations
 
-1. Visit https://aistudio.google.com/apikey and create **your own** Gemini API key, if eligible for a free tier.
-2. On the site, check **Enable Gemini AI search planning and second-opinion review**.
-3. Paste the key into the **password** input, choose a model supported by your account, inspect the preview of the limited candidate info, then check the **consent** box and click Search.
-4. The model may choose the source order, recommend dynamic query phrases, and provide reviews. The app executes a bounded allowlisted search, may expand once when few strong candidates appear, and requires a person to choose whether to apply.
-5. If free-tier quota or model access is unavailable, disable AI mode and continue using basic matching.
+- This is a prototype; it has **not** undergone a professional privacy/security audit. Uploaded resumes reach the Streamlit server. Do **not** collect real personal resumes from the public until you have appropriate data protection, retention/deletion controls, and consent.
+- The app does **not** search every job on the internet. It retrieves openings from a **limited set of public employer feeds** (Greenhouse, Lever, Ashby, SmartRecruiters and Remotive where available), plus external search links to platforms such as Indeed and Internshala. External search links are not scored or presented as verified vacancies.
+- Employer job descriptions may be incomplete or out of date, and matching is **heuristic** (not a verified qualification assessment or hiring probability).
+- Optional Gemini planning/review needs the user's own API key and opt-in. It sends a limited redacted candidate summary and some public descriptions to Google, and subject to the provider's terms and limits. **No Gemini key is required for basic matching.**
+- Premium/private feeds require permission; the app does not bypass logins, paywalls or usage restrictions.
+- RoleRoute **never applies to a job on a person's behalf**. A person must inspect the employer's source page and apply themselves.
+- If a PDF consists of scanned images, text extraction may fail; a text-based PDF or DOCX is recommended.
 
-**Security and privacy:** This is a prototype, NOT security-audited. Never share API keys with users or commit them to GitHub. Streamlit sees uploaded data and transient session state; Gemini receives limited skill/focus signals and public job descriptions only if enabled and consented to. The free Gemini tier may use data for product improvement. Avoid real personal resumes until there is privacy review, security hardening, retention and deletion policies, and compliance with applicable laws. For scaled public deployment, add authenticated user accounts, rate limits and server-side secrets/key handling.
+## Repository files
 
-## Accuracy and limits
-
-- Matching heuristics are not an employer ATS score, verified eligibility or the chance of being hired.
-- Required / preferred parsing is approximate; real descriptions are inconsistent and sometimes omit requirements. Check employer page before applying.
-- Career relevance may still miss synonyms or unusual job titles. Optional LLM can help, but can also make mistakes; its second opinion does not override source evidence.
-- 100% job coverage is not possible: providers restrict access; jobs may be unindexed, closed or private.
-- Premium/private feeds are **not accessible without authorization**; no bypass is included.
-- The app cannot independently validate degrees, experience, work authorization, visas or whether jobs remain open.
-- No application is sent to an employer. Application is manual through source links.
-
-## Develop/test locally (optional)
-
-Requires Python 3.10+.
-
-```bash
-pip install -r requirements.txt
-streamlit run streamlit_app.py
-python -m pytest -q
-```
-
-Unit tests are located in `tests/` (development machine needs `pytest`). Public-feed unit tests use mocked HTTP responses. API connectivity, free-tier quota, live job status, and full Streamlit runtime need checking after deployment.
-
-## Files
-
-- `streamlit_app.py`: Streamlit UI and bounded tool orchestration
-- `matching_engine.py`: dynamic resume-to-job-description matcher and explanations
-- `llm_agent.py`: optional Gemini tool planning and reviewed output (user key + consent)
-- `job_sources.py`: public API adapters and external search links
-- `analyzer.py`: resume text reading and initial technical skill signals
-- `requirements.txt`: runtime dependencies
-- `tests/`: automated tests
+- `streamlit_app.py` — user interface, auto-search and result presentation
+- `matching_engine.py` — actual job-description vs resume matching
+- `analyzer.py` — file parsing and technical skill patterns
+- `job_sources.py` — approved public job feed adapters
+- `llm_agent.py` — optional bounded Gemini integration
+- `requirements.txt` — dependencies
+- `tests/` — regression tests (do not need to upload the tests to GitHub for deployment)
