@@ -1,4 +1,4 @@
-"""RoleRoute v3 — discover public vacancies + transparent resume matching.
+"""RoleRoute v3.1 — discover public vacancies + transparent resume matching.
 
 This version is an automated, rule-based workflow rather than an LLM agent.
 """
@@ -12,7 +12,7 @@ from analyzer import extract_resume_text, find_skills, google_job_search_url, su
 from job_sources import (
     DEFAULT_BOARDS, JobSourceError, JobListing,
     fetch_greenhouse_jobs, fetch_lever_jobs, fetch_remotive_jobs,
-    match_jobs, parse_board_names,
+    match_jobs, matching_diagnostics, parse_board_names,
 )
 
 st.set_page_config(page_title="RoleRoute | AI Job Finder Prototype", page_icon="🎯", layout="wide")
@@ -33,7 +33,7 @@ st.markdown("""
 
 with st.sidebar:
     st.markdown("## 🎯 RoleRoute")
-    st.caption("Resume-to-Job Finder · Version 3")
+    st.caption("Resume-to-Job Finder · Version 3.1")
     st.divider()
     st.markdown("**Available now**")
     st.write("✅ Read PDF and DOCX resumes")
@@ -48,7 +48,7 @@ with st.sidebar:
     st.divider()
     st.caption("Early prototype. Please use fictional resumes for testing.")
 
-st.markdown('<div class="rr-eyebrow">VERSION 3 · SMARTER JOB DISCOVERY</div>', unsafe_allow_html=True)
+st.markdown('<div class="rr-eyebrow">VERSION 3.1 · SMARTER JOB DISCOVERY</div>', unsafe_allow_html=True)
 st.markdown('<div class="rr-title">Discover jobs that align with your resume.</div>', unsafe_allow_html=True)
 st.markdown('<div class="rr-subtitle">Upload a resume, select your experience and preferred regions, then find ranked vacancies from selected public employer boards and a remote-jobs feed. Opens in Chrome and Edge.</div>', unsafe_allow_html=True)
 
@@ -211,12 +211,61 @@ else:
             years_experience=int(years), strict_experience=strict_exp,
             preferred_city=city, strict_city=strict_city, limit=30,
         )
+        diagnostics = matching_diagnostics(
+            jobs, skills, role_names, scopes=set(scopes),
+            years_experience=int(years), strict_experience=strict_exp,
+            preferred_city=city, strict_city=strict_city,
+        )
+        with st.expander("Why were some jobs removed? View matching diagnostics", expanded=not matches):
+            st.caption("Counts are sequential. The source list is limited and a filtering result is not an assessment of job availability.")
+            count_cols = st.columns(3)
+            for col, label, key in zip(count_cols, ("Retrieved", "After region filter", "After experience filter"), ("retrieved", "region", "experience")):
+                col.metric(label, diagnostics[key])
+            st.write(
+                f"Distinct links: **{diagnostics['unique']}** · "
+                f"After city setting: **{diagnostics['city']}** · "
+                f"After relevance criteria: **{diagnostics['relevance']}**"
+            )
+            if diagnostics["region"] == 0:
+                st.info("None of these source listings fell in the selected regions. Try selecting additional regions.")
+            elif diagnostics["city"] == 0:
+                st.info("The exact-city filter removed the remaining listings. Turn it off to explore other locations.")
+            elif diagnostics["experience"] == 0:
+                st.info("Experience requirements/seniority filters removed the remaining listings. You can turn off the strict experience filter, but always verify eligibility.")
+            elif diagnostics["relevance"] == 0:
+                st.info("No listings passed the role-title/skill relevance threshold. Try another role or explore broader results below.")
+
         if not matches:
             st.info(
-                "No matches among the retrieved jobs with these settings. "
-                "Try turning off the strict experience/city filter or using another role. "
-                "This does NOT mean that no suitable jobs exist."
+                "No strong matches among the retrieved jobs with these settings. "
+                "This does NOT mean that no suitable jobs exist. "
+                "Try a different job title, fewer strict filters, or different job sources."
             )
+            show_broader = st.checkbox(
+                "Show broader exploratory results (may require more experience or have weak skill overlap)",
+                value=False,
+                help="These are leads to investigate, NOT suitable-job recommendations.",
+            )
+            if show_broader:
+                exploratory = match_jobs(
+                    jobs, skills, role_names, scopes=set(scopes),
+                    years_experience=int(years), strict_experience=False,
+                    preferred_city=city, strict_city=False, limit=8, exploratory=True,
+                )
+                if not exploratory:
+                    st.warning("No exploratory leads in this small set of job sources either. Add more relevant public employer boards or try another role.")
+                else:
+                    st.warning("Exploratory leads are not verified matches. They may be senior, unsuitable for freshers, or restricted to other countries.")
+                    for item in exploratory:
+                        j = item.job
+                        with st.container(border=True):
+                            st.write(f"**{j.title}** — {j.company} · {j.location}")
+                            st.caption(
+                                f"Approximate relevance: {item.score}% · "
+                                + item.experience_note + " · " + item.remote_eligibility
+                            )
+                            st.write("Overlapping resume skills: " + (", ".join(item.matching_skills) or "none detected"))
+                            st.link_button("View original vacancy (check requirements)", j.url)
         else:
             st.write(f"**Showing {len(matches)} potential matches** (highest estimated relevance first)")
             st.caption(
@@ -260,7 +309,7 @@ else:
         )
 
 st.markdown(
-    '<div class="rr-footer">RoleRoute v3 · Free prototype · Source-aware matching · '
+    '<div class="rr-footer">RoleRoute v3.1 · Free prototype · Source-aware matching · '
     'No resume submission to employers · Check every vacancy before applying.</div>',
     unsafe_allow_html=True,
 )

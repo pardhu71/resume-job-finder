@@ -319,7 +319,7 @@ def match_jobs(
     jobs: list[JobListing], skills: list[str], roles: list[str], *,
     scopes: set[str] | None = None, years_experience: int = 0,
     strict_experience: bool = True, preferred_city: str = "", strict_city: bool = False,
-    limit: int = 30,
+    limit: int = 30, exploratory: bool = False,
 ) -> list[JobMatch]:
     """Ranking with title/skill/experience/location signals; not an eligibility decision."""
     scopes = scopes if scopes is not None else {"India", "International", "Remote"}
@@ -348,7 +348,12 @@ def match_jobs(
         listed = set(find_skills(job.description + " " + job.title))
         matching = sorted(listed & have)
         missing = sorted(listed - have)
-        if title_ratio < 0.28 and len(matching) < 2:
+        if exploratory:
+            # Exploratory discovery: keep at least one skill signal or a weak title signal.
+            # These are not reliable fits and must be labeled separately in the UI.
+            if title_ratio < 0.20 and not matching:
+                continue
+        elif title_ratio < 0.28 and len(matching) < 2:
             continue
 
         skill_ratio = len(matching) / len(listed) if listed else 0
@@ -388,3 +393,49 @@ def match_jobs(
         ))
     results.sort(key=lambda match: (-match.score, -len(match.matching_skills), match.job.title.lower()))
     return results[:limit]
+
+
+def matching_diagnostics(
+    jobs: list[JobListing], skills: list[str], roles: list[str], *,
+    scopes: set[str] | None = None, years_experience: int = 0,
+    strict_experience: bool = True, preferred_city: str = "", strict_city: bool = False,
+) -> dict[str, int]:
+    """Count how many distinct postings survive each stage of the same hard filters.
+
+    Counts are sequential, so each stage can explain a zero-match result.
+    They are not eligibility estimates.
+    """
+    scopes = scopes if scopes is not None else {"India", "International", "Remote"}
+    counts = {
+        "retrieved": len(jobs), "unique": 0, "region": 0,
+        "city": 0, "experience": 0, "relevance": 0, "exploratory": 0,
+    }
+    seen: set[str] = set()
+    have = set(skills)
+    for job in jobs:
+        key = canonical_url(job.url)
+        if key in seen:
+            continue
+        seen.add(key)
+        counts["unique"] += 1
+        if not chosen_scope(job, scopes):
+            continue
+        counts["region"] += 1
+        if strict_city and preferred_city and not location_text_matches(job.location, preferred_city):
+            continue
+        counts["city"] += 1
+        requested = min_experience_years(job.description)
+        looks_senior = bool(SENIOR_TITLE.search(job.title))
+        if strict_experience and (
+            (requested is not None and requested > years_experience)
+            or (years_experience < 2 and looks_senior)
+        ):
+            continue
+        counts["experience"] += 1
+        title_ratio = title_relevance(job.title, roles)
+        matching = set(find_skills(job.description + " " + job.title)) & have
+        if title_ratio >= 0.28 or len(matching) >= 2:
+            counts["relevance"] += 1
+        if title_ratio >= 0.20 or bool(matching):
+            counts["exploratory"] += 1
+    return counts

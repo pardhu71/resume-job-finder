@@ -72,3 +72,11 @@ Tests use **mock API data**, so they prove expected parsing/matching behavior bu
 - Lever public posting API: https://github.com/lever/postings-api
 - Remotive API and terms: https://remotive.com/remote-jobs/api
 - Streamlit hosting: https://docs.streamlit.io/deploy/streamlit-community-cloud
+
+
+## V3.1 diagnostic update
+
+- Shows the number of postings remaining after deduplication, region, city, experience, and relevance filtering.
+- When no strong matches are found, users can opt into a clearly labeled broader exploratory-results view (not guaranteed fits; includes potential senior/ineligible roles).
+- Normal strict matching behavior is unchanged.
+- No additional API access or secrets are required.
