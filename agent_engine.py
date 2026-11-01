@@ -12,6 +12,7 @@ from typing import Callable
 
 from job_sources import DEFAULT_BOARDS, EXTRA_DEFAULT_BOARDS, JobListing, canonical_job_key
 from matching_engine import rank_jobs, resume_focus, extract_resume_skills, clean_tokens
+from resume_profile import parse_resume
 
 REGION_ORDER = ('India', 'International', 'Remote')
 MAX_SOURCES = 28
@@ -126,8 +127,14 @@ def run_agent(
     """
     trace, errors, refinements = [], [], []
     skills = extract_resume_skills(resume)
+    structured = parse_resume(resume)
     education = sorted(set(re.findall(r'\b(?:B\.?Tech|B\.?E\.?|M\.?Tech|M\.?E\.?|B\.?Sc|M\.?Sc|Bachelor(?:s)?|Master(?:s)?|Ph\.?D|Diploma|MBA)\b', resume, flags=re.I)))
-    profile = {'skills': list(skills[:65]), 'career_focus': focus[:1000],
+    profile = {'skills': list(skills[:65]), 'career_focus': focus[:1700],
+               'stated_career_titles': list(structured.titles),
+               'resume_sections_used': [k for k, v in (
+                    ('summary', structured.summary), ('work_experience', structured.work_experience),
+                    ('projects', structured.projects), ('education', structured.education),
+                    ('skills', structured.skills_section)) if v],
                'education_evidence': education[:12],
                'experience_years': years, 'country': country}
     if ai_profile:
@@ -141,7 +148,9 @@ def run_agent(
                 profile['qualification_notes'] = str(proposed.get('qualification_notes', ''))[:300]
         except Exception:
             errors.append('AI resume understanding unavailable; local extraction was used.')
-    trace.append(f'1 · Understood resume: {len(skills)} extracted skills; experience {years if years is not None else "unconfirmed"}.')
+    trace.append(f'1 · Understood the complete resume: {len(structured.titles)} career title(s), '
+                 f'{len(skills)} skill signals; read summary, projects, experience and education where available; '
+                 f'experience years {years if years is not None else "unconfirmed"}.')
 
     plan = {'search_terms': safe_search_terms([], focus, skills), 'region_order': list(scopes),
             'query_reason': 'Candidate-derived career focus', 'start_with_extra_sources': False}
@@ -176,7 +185,7 @@ def run_agent(
         errors.append('First source round was temporarily unavailable.')
     jobs = distinct_jobs(jobs)
     ranked, stats = rank_jobs(jobs, resume, evaluation_focus, years, scopes, country, city, max_results=MAX_RESULTS)
-    trace.append(f'4 · Compared {len(jobs)} distinct postings; {relevant_count(ranked)} potentially relevant results.')
+    trace.append(f'4 · Compared {len(jobs)} distinct job descriptions with titles, projects, experience, education and skills; {relevant_count(ranked)} potentially relevant results.')
 
     if relevant_count(ranked) < minimum_results and secondary:
         trace.append(f'5 · Few relevant matches: expanding to {len(secondary)} more approved feeds.')

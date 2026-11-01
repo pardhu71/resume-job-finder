@@ -22,6 +22,7 @@ from matching_engine import (extract_resume_skills, resume_focus, rank_jobs,
                              evaluate_job, safe_llm_profile)
 from llm_agent import plan_search, explain_job_matches, interpret_resume, refine_search, AgentError
 from agent_engine import run_agent
+from resume_profile import parse_resume, dominant_topic
 
 st.set_page_config(page_title='RoleRoute | Matching Jobs', page_icon='🎯', layout='wide')
 st.markdown('''<style>
@@ -33,7 +34,7 @@ st.markdown('''<style>
 
 with st.sidebar:
     st.title('🎯 RoleRoute')
-    st.caption('Resume-to-Job Agent · Version 6')
+    st.caption('Resume-to-Job Agent · Version 6.1')
     st.divider()
     st.success('Live job feed search + description-based matching')
     st.write('✅ No predefined list of job roles')
@@ -114,7 +115,7 @@ def display_match(item, ai_notes: dict | None = None) -> None:
         a.markdown('#### ' + html.escape(job.title))
         a.caption(f'{job.company} · {job.location} · {job.source}')
         b.metric('Fit estimate', f'{item.score}%')
-        st.caption('Fit estimate is a heuristic, not hiring probability, eligibility, or employer ATS score.')
+        st.caption('Whole-resume evidence estimate, not hiring probability, confirmed eligibility, or an employer ATS score.')
         st.progress(item.score / 100)
         if item.found_required:
             st.write('**Required skills evidenced in resume:** ' + ', '.join(item.found_required))
@@ -127,7 +128,13 @@ def display_match(item, ai_notes: dict | None = None) -> None:
         if item.found_mentioned:
             st.caption('Other shared technical terms: ' + ', '.join(item.found_mentioned))
         if item.role_evidence:
-            st.caption('Resume-focus terms found in job title: ' + ', '.join(item.role_evidence))
+            st.write('**Why this role matches the resume:**')
+            for explanation in item.role_evidence:
+                st.write('• ' + explanation)
+        if item.evidence_details:
+            with st.expander('Resume sections considered for this match'):
+                for section in item.evidence_details:
+                    st.write('• ' + section)
         st.caption('Experience: ' + item.experience_note)
         st.caption('Location: ' + item.location_note)
         for message in item.warnings:
@@ -146,13 +153,26 @@ if resume:
     # Each newly uploaded file starts a search automatically; searches are NOT
     # rerun on every Streamlit widget change, avoiding unnecessary API traffic.
     skills = extract_resume_skills(resume)
-    suggested_focus = resume_focus(resume)[:1000]
-    st.caption('Detected resume skills: ' + (', '.join(skills[:24]) if skills else 'Skills were not confidently detected. Results will need manual review.'))
+    candidate_profile = parse_resume(resume)
+    suggested_focus = resume_focus(resume)[:1700]
+    if candidate_profile.titles:
+        st.write('**Career title(s) found in resume:** ' + ', '.join(candidate_profile.titles[:3]))
+    else:
+        st.caption('No explicit professional title found. Career relevance will be estimated from project, experience and summary evidence.')
+    considered = [label for label, value in (
+        ('Professional summary', candidate_profile.summary),
+        ('Work/internship experience', candidate_profile.work_experience),
+        ('Projects', candidate_profile.projects),
+        ('Education', candidate_profile.education),
+        ('Technical skills', candidate_profile.skills_section),
+        ('Certifications', candidate_profile.certifications)) if value]
+    st.caption('Resume information considered: ' + (', '.join(considered) if considered else 'Available resume text'))
+    st.caption('Detected technical terms: ' + (', '.join(skills[:24]) if skills else 'No standard skills identified; compare with full job descriptions manually.'))
 
     with st.expander('Search preferences and optional AI (edit only if needed)'):
         focus = st.text_area(
-            'Career focus from resume — you can correct it', value=suggested_focus,
-            key=f'career_focus_{resume_digest[:16]}', max_chars=1100,
+            'Career titles, work, projects and skills detected from resume — you can correct them', value=suggested_focus,
+            key=f'career_focus_{resume_digest[:16]}', max_chars=1700,
             help='Derived from resume text, not a fixed list of job roles.')
         left, right = st.columns(2)
         with left:
@@ -176,7 +196,7 @@ if resume:
         ai_model = 'gemini-2.5-flash'
         consent = False
         if enable_ai:
-            st.warning('With consent, selected resume skill/focus signals and excerpts of public job descriptions are sent to Google Gemini. No full resume file is sent. Free-tier data may be used to improve Google products. Avoid including private identifiers in the career-focus box.')
+            st.warning('With consent, redacted career-title, summary, work, project, education and skill excerpts and public job descriptions are sent to Google Gemini. No full resume file is sent. Free-tier data may be used to improve Google products. Avoid including private identifiers in the career-focus box.')
             api_key = st.text_input('Gemini API key', type='password', help='Do not commit this to GitHub.')
             ai_model = st.selectbox('Gemini model', ['gemini-2.5-flash', 'gemini-2.5-flash-lite'])
             consent = st.checkbox('I consent to sending selected resume signals and public job description excerpts to Gemini')
@@ -338,4 +358,4 @@ else:
     st.session_state.pop('v52_searched_upload_digest', None)
 
 st.divider()
-st.caption('RoleRoute v6 · Read-only bounded agent · Verify all vacancies before applying · No auto-apply or premium access bypass.')
+st.caption('RoleRoute v6.1 · Whole-resume matching · Read-only bounded agent · Verify all vacancies before applying · No auto-apply or premium access bypass.')

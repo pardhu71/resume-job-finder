@@ -10,6 +10,7 @@ import re
 from collections import Counter
 
 from analyzer import find_skills
+from resume_profile import parse_resume, dominant_topic, job_topics, overlap_ratio, meaningful_terms, ResumeProfile
 from job_sources import JobListing, chosen_scope, location_text_matches, location_is_india, canonical_job_key, remote_eligibility
 
 STOP = set('the and or with for from your their our you work in on at as to of by use using knowledge have ability strong good understanding experience years year minimum required preferred must plus team systems engineering engineer developer specialist internship intern candidate position role skills skill technologies technology projects project build built based develop developed development designing design various include including working worked experience professional implementation'.split())
@@ -71,20 +72,18 @@ def extract_resume_skills(resume: str) -> tuple[str, ...]:
 
 
 def resume_focus(resume: str, extra: str = '') -> str:
-    """Derive interests/target roles/projects from resume text, rather than predefined roles."""
-    chosen = []
-    if extra.strip():
-        chosen.append(extra.strip()[:180])
-    for raw in resume.splitlines():
-        line = raw.strip()
-        if re.search(r'\b(?:interested in|seeking|target role[s]?|career goal|objective|specialization|focus(?:ed)? on)\b', line, re.I):
-            chosen.append(line[:230])
-        elif re.match(r'^(?:projects?|work experience|internships?|summary)\s*:', line, re.I):
-            chosen.append(line[:230])
-    # Use full text as backstop for resumes with no structured project lines.
-    if not chosen:
-        chosen = [resume[:500]]
-    return ' '.join(chosen)[:1100]
+    """Build search focus from the whole resume, including *stated career titles*.
+
+    No predefined occupation list determines candidate roles. The resume is
+    read for titles, summary, work, projects, education, and specialized skills.
+    """
+    profile = parse_resume(resume)
+    pieces = [extra.strip()[:180]] if extra.strip() else []
+    pieces.extend(profile.titles)
+    pieces.extend((profile.summary[:360], profile.work_experience[:360],
+                   profile.projects[:440], profile.education[:170],
+                   profile.skills_section[:220]))
+    return ' '.join(x for x in pieces if x)[:1700] or resume[:600]
 
 
 def focus_search_query(focus: str) -> str:
@@ -98,16 +97,26 @@ def focus_search_query(focus: str) -> str:
 
 def safe_llm_profile(resume: str, extra: str = '') -> dict:
     """Send only skill tags and redacted project/interest signals, never the whole resume."""
-    focus = resume_focus(resume, extra)
-    focus = EMAIL.sub('[email removed]', focus)
-    focus = PHONE.sub('[phone removed]', focus)
-    focus = LINK.sub('[link removed]', focus)
+    profile = parse_resume(resume)
+    def redact(value: str, limit: int) -> str:
+        # Contact details are removed before opt-in LLM calls; use the preview
+        # control to inspect any remaining sensitive employers/projects.
+        value = EMAIL.sub('[email removed]', value)
+        value = PHONE.sub('[phone removed]', value)
+        value = LINK.sub('[link removed]', value)
+        return value[:limit]
+    focus = redact(resume_focus(resume, extra), 850)
     safe_skills = []
     for skill in extract_resume_skills(resume):
         skill = LINK.sub('[link removed]', PHONE.sub('[phone removed]', EMAIL.sub('[email removed]', skill)))
         if '[' not in skill:
             safe_skills.append(skill)
-    return {'skills': safe_skills[:65], 'career_focus': focus[:850]}
+    return {'skills': safe_skills[:65], 'career_focus': focus,
+            'stated_titles': [redact(title, 90) for title in profile.titles[:5]],
+            'summary_excerpt': redact(profile.summary, 250),
+            'work_excerpt': redact(profile.work_experience, 300),
+            'projects_excerpt': redact(profile.projects, 360),
+            'education_excerpt': redact(profile.education, 180)}
 
 
 def skill_in_text(skill: str, text: str) -> bool:
@@ -181,22 +190,87 @@ def years_requirement(text: str) -> tuple[int | None, str]:
     return None, 'minimum years not confidently found'
 
 
-def focus_alignment(job: JobListing, focus: str, skills: tuple[str, ...]) -> tuple[float, tuple[str, ...], bool]:
-    """Check title/subject alignment separately from generic shared tools.
+def whole_resume_alignment(job: JobListing, profile: ResumeProfile,
+                           focus: str) -> tuple[float, tuple[str, ...], bool, tuple[str, ...]]:
+    """Compare job's career intent to candidate titles, work, projects, summary.
 
-    Focus terms come from user's resume; does not map to predefined careers.
+    Shared generic programming tools cannot by themselves establish career fit.
+    The topic vocabulary is a loose technical synonym aid, not a job catalog.
     """
-    focus_tokens = set(clean_tokens(focus))
-    job_title = set(clean_tokens(job.title))
-    # Do not let generic 'engineer', 'software' etc outweigh specialized focus.
-    related = sorted(focus_tokens & job_title)
-    special_in_title = [w for w in related if w not in GENERIC]
-    specific_skills = [s for s in skills if s.lower() not in GENERIC and len(s) >= 3 and skill_in_text(s, job.description)]
-    title_ratio = len(special_in_title) / max(1, min(4, len(job_title)))
-    # job descriptions can mention incidental tools; title boost is intentionally larger
-    alignment = min(1., .75 * title_ratio + .09 * min(3, len(specific_skills)))
-    aligned = bool(special_in_title) or len(specific_skills) >= 2
-    return alignment, tuple(special_in_title), aligned
+    job_title_topics, job_description_topics = job_topics(job.title, job.description)
+    primary_topic, topic_confidence = dominant_topic(profile)
+    direct_title = max((overlap_ratio(t, job.title) for t in profile.titles), default=0.0)
+    same_title_topic = bool(primary_topic and primary_topic in job_title_topics)
+    same_description_topic = bool(primary_topic and primary_topic in job_description_topics)
+    # A very different specialized job title is evidence of a domain mismatch,
+    # even when the listing happens to mention Python, Excel, Git, or Linux.
+    different_career = bool(primary_topic and topic_confidence >= 2.5 and (
+        (job_title_topics and primary_topic not in job_title_topics) or
+        (not job_title_topics and len(job_description_topics) == 1
+         and primary_topic not in job_description_topics)))
+    if same_title_topic:
+        title_score = max(direct_title, .95)
+    elif direct_title:
+        title_score = direct_title
+    elif same_description_topic:
+        title_score = .56
+    elif not profile.titles and primary_topic and (same_description_topic or same_title_topic):
+        title_score = .50
+    else:
+        title_score = 0.0
+    project_overlap = overlap_ratio(profile.projects, job.title + ' ' + job.description[:2800])
+    work_overlap = overlap_ratio(profile.work_experience, job.title + ' ' + job.description[:2800])
+    summary_overlap = overlap_ratio(profile.summary, job.title + ' ' + job.description[:1800])
+    project_score = max(project_overlap, .90 if same_title_topic and profile.projects else
+                        .70 if same_description_topic and profile.projects else 0.0)
+    work_score = max(work_overlap, .80 if same_title_topic and profile.work_experience else 0.0)
+    summary_score = max(summary_overlap, .55 if same_title_topic and profile.summary else 0.0)
+
+    # Full-resume subject match. If there is no explicit career title, projects
+    # and experience may still establish the professional direction.
+    field_score = max(title_score,
+                      .83 if not profile.titles and same_title_topic and profile.projects else 0.0,
+                      .62 if not profile.titles and same_description_topic and profile.projects else 0.0,
+                      .64 if not profile.titles and same_title_topic and profile.work_experience else 0.0)
+    if different_career:
+        field_score = min(field_score, .10)
+    project_specific = len(meaningful_terms(profile.projects) &
+                           meaningful_terms(job.title + ' ' + job.description[:2800])) >= 2
+    work_specific = len(meaningful_terms(profile.work_experience) &
+                        meaningful_terms(job.title + ' ' + job.description[:2800])) >= 2
+    career_ok = not different_career and (
+        field_score >= .32 or (project_specific and project_score >= .25)
+        or (work_specific and work_score >= .25)
+        or (summary_score >= .40 and bool(job_title_topics | job_description_topics)))
+    alignment = min(1.0, .66 * field_score + .16 * project_score +
+                    .12 * work_score + .06 * summary_score)
+
+    evidence = []
+    if field_score >= .32:
+        if profile.titles:
+            evidence.append('Career title: ' + ', '.join(profile.titles[:2]))
+        elif primary_topic:
+            evidence.append('Career direction indicated by resume: ' + primary_topic)
+    if project_score >= .20 and profile.projects:
+        evidence.append('Technical projects support this role')
+    if work_score >= .20 and profile.work_experience:
+        evidence.append('Work or internship experience supports this role')
+    if summary_score >= .20 and profile.summary:
+        evidence.append('Professional summary supports this role')
+    if not evidence and primary_topic:
+        evidence.append('Career focus needs verification: ' + primary_topic)
+    details = []
+    if profile.titles:
+        details.append('Career title(s) examined: ' + ', '.join(profile.titles[:3]))
+    if profile.summary:
+        details.append('Professional summary compared')
+    if profile.work_experience:
+        details.append('Work/internship history compared')
+    if profile.projects:
+        details.append('Projects compared with job responsibilities')
+    if profile.education:
+        details.append('Education compared')
+    return alignment, tuple(evidence), career_ok, tuple(details)
 
 
 @dataclass(frozen=True)
@@ -214,18 +288,21 @@ class DetailedMatch:
     location_note: str
     warnings: tuple[str, ...]
     description_available: bool
+    evidence_details: tuple[str, ...] = ()
 
 
 def evaluate_job(job: JobListing, resume: str, focus: str, years: int | None, country: str='India',
-                 have_skills: tuple[str, ...] | None = None) -> DetailedMatch:
+                 have_skills: tuple[str, ...] | None = None,
+                 profile: ResumeProfile | None = None) -> DetailedMatch:
     have = have_skills if have_skills is not None else extract_resume_skills(resume)
+    profile = profile if profile is not None else parse_resume(resume)
     catalog = set(have) | set(find_skills(job.description + ' ' + job.title)) | set(extract_job_requirement_terms(job.description))
     # For user-provided skills not in the known dictionary, exact phrase matching works.
     signals = requirement_signals(job.description, tuple(catalog))
     def present(xs: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(s for s in xs if any(s.casefold() == h.casefold() for h in have))
+        return tuple(s for s in xs if any(s.casefold() == h.casefold() for h in have) or skill_in_text(s, resume))
     def not_present(xs: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(s for s in xs if not any(s.casefold() == h.casefold() for h in have))
+        return tuple(s for s in xs if not (any(s.casefold() == h.casefold() for h in have) or skill_in_text(s, resume)))
     required = signals['required']
     preferred = signals['preferred']
     mentioned = signals['mentioned']
@@ -234,7 +311,7 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int | None, co
     found_pref = present(preferred)
     miss_pref = not_present(preferred)
     found_other = present(mentioned)
-    align, role_evidence, domain_ok = focus_alignment(job, focus, have)
+    align, role_evidence, domain_ok, evidence_details = whole_resume_alignment(job, profile, focus)
     years_min, years_note = years_requirement(job.description)
     if years_min is not None:
         years_note = (f'Listing mentions {years_min}+ years; profile states {years}'
@@ -267,23 +344,38 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int | None, co
         caution.append('No convincing career-focus match in the title or specialized requirements')
     if miss_req:
         caution.append('Some skills mentioned as required are not evidenced in the resume')
-    # 'Unknown' is not a confirmed mismatch. Do not score empty descriptions highly.
-    req_score = len(found_req)/len(required) if required else .40
-    pref_score = len(found_pref)/len(preferred) if preferred else .40
-    detail_score = min(1., len(found_other) / 3)
-    exp_score = 1. if years_min is not None and years is not None and years >= years_min else .5 if (years_min is None or years is None) else 0.
-    score = round(40 * req_score + 10 * pref_score + 15 * detail_score + 30 * align + 5 * exp_score)
+    # Career and project evidence outweigh incidental tool overlap. Not a
+    # probability of hiring, and incomplete descriptions must remain uncertain.
+    req_score = len(found_req) / len(required) if required else .50
+    pref_score = len(found_pref) / len(preferred) if preferred else .50
+    skills_score = min(1.0, (len(found_req) + .35 * len(found_pref) +
+                             .15 * len(found_other)) / max(1.0, len(required) + .35 * len(preferred)))
+    years_score = (1.0 if years_min is not None and years is not None and years >= years_min
+                   else .50 if years_min is None or years is None else 0.0)
+    # Compare stated qualifications when the job includes an explicit degree.
+    education_text = profile.education + ' ' + resume[:800]
+    job_degree = re.findall(r'\b(?:ph\.?d|doctorate|master(?:s)?|bachelor(?:s)?|b\.?tech|m\.?tech|mba|b\.?sc|m\.?sc)\b', job.description, re.I)
+    # We cannot verify equivalence of all international degree names, so this
+    # score only means the resume visibly mentions the stated level.
+    edu_evidenced = (not job_degree or any(re.search(r'\b' + re.escape(degree) + r'\b', education_text, re.I)
+                                         for degree in job_degree))
+    edu_score = .50 if not job_degree else 1.0 if edu_evidenced else 0.0
+    if job_degree and not edu_evidenced:
+        caution.append('Degree mentioned in job but not evidenced in resume; check exact qualification')
+    score = round(58 * align + 25 * skills_score + 8 * req_score +
+                  3 * pref_score + 4 * years_score + 2 * edu_score)
     if not job.description.strip():
         score = min(score, 35)
     if not domain_ok:
-        score = min(score, 42)
+        score = min(score, 35)
     if conflict:
         score = min(score, 35)
     if miss_req:
-        score = min(score, 60)
-    if conflict or (not job.description.strip()) or (not domain_ok):
+        score = min(score, 62)
+    if conflict or not job.description.strip() or not domain_ok:
         category = 'Review / conflict'
-    elif align >= .25 and (not required or req_score >= .65) and not miss_req and score >= 60 and not (years is None and (years_min is not None or SENIOR.search(job.title))):
+    elif align >= .45 and (not required or req_score >= .72) and not miss_req and score >= 64 \
+            and not (years is None and (years_min is not None or SENIOR.search(job.title))):
         category = 'Strong'
     else:
         category = 'Possible'
@@ -294,6 +386,7 @@ def evaluate_job(job: JobListing, resume: str, focus: str, years: int | None, co
         found_mentioned=found_other, role_evidence=role_evidence,
         experience_note=years_note, location_note=locnote,
         warnings=tuple(caution), description_available=bool(job.description.strip()),
+        evidence_details=evidence_details,
     )
 
 
@@ -303,6 +396,7 @@ def rank_jobs(jobs: list[JobListing], resume: str, focus: str, years: int | None
     # keep uncertain and rejected listings distinct for exploration.
     seen: set[str] = set()
     candidate_skills = extract_resume_skills(resume)  # compute once, not once per retrieved vacancy
+    candidate_profile = parse_resume(resume)  # examine the entire resume once
     included: list[DetailedMatch] = []
     stats = Counter(retrieved=len(jobs))
     for job in jobs:
@@ -316,7 +410,7 @@ def rank_jobs(jobs: list[JobListing], resume: str, focus: str, years: int | None
             continue
         stats['in_region'] += 1
         # Non-strict city: city is a preference, not a hard exclusion.
-        item = evaluate_job(job, resume, focus, years, country, have_skills=candidate_skills)
+        item = evaluate_job(job, resume, focus, years, country, have_skills=candidate_skills, profile=candidate_profile)
         if 'No convincing career-focus match' in ' '.join(item.warnings):
             stats['unrelated_removed'] += 1
             continue
